@@ -7,27 +7,20 @@ from typing import Any
 
 def save_json(
     path: Path,
-    value: Any,
+    data: Any,
 ) -> None:
     path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    temporary_path = path.with_suffix(
-        path.suffix + ".tmp"
-    )
-
-    with temporary_path.open(
+    with path.open(
         "w",
         encoding="utf-8",
-    ) as output_file:
+    ) as file:
         json.dump(
-            value,
-            output_file,
+            data,
+            file,
             ensure_ascii=False,
             indent=2,
-            allow_nan=False,
         )
-
-    temporary_path.replace(path)

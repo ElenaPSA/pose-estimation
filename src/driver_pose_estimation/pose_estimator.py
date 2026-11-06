@@ -52,9 +52,7 @@ class DriverPoseEstimator:
             settings.model_path,
         )
 
-        self.model = YOLO(
-            settings.model_path
-        )
+        self.model = YOLO(settings.model_path)
 
     def estimate(
         self,
@@ -124,9 +122,7 @@ class DriverPoseEstimator:
                     x2=float(x2),
                     y2=float(y2),
                     confidence=float(
-                        box_confidences[
-                            person_index
-                        ]
+                        box_confidences[person_index]
                     ),
                 )
 
@@ -147,9 +143,7 @@ class DriverPoseEstimator:
                     len(COCO_KEYPOINT_NAMES),
                 )
 
-                for index in range(
-                    point_count
-                ):
+                for index in range(point_count):
                     x, y = person_points[index]
 
                     keypoints.append(
@@ -177,9 +171,7 @@ class DriverPoseEstimator:
                     )
                 )
 
-        driver = self._select_driver(
-            poses
-        )
+        driver = self._select_driver(poses)
 
         processing_time_ms = (
             time.perf_counter()
@@ -199,19 +191,10 @@ class DriverPoseEstimator:
     def _select_driver(
         poses: list[PoseDetection],
     ) -> PoseDetection | None:
-        """
-        Select the largest detected person as the driver.
-
-        For a fixed driver-facing camera, the driver is normally
-        the largest visible person. This strategy can later be
-        replaced by a configured driver region of interest.
-        """
         if not poses:
             return None
 
         return max(
             poses,
-            key=lambda pose: (
-                pose.bounding_box.area
-            ),
+            key=lambda pose: pose.bounding_box.area,
         )
