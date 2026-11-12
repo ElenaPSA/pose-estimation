@@ -274,8 +274,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <label for="videoFile">Driver video</label>
           <input id="videoFile" type="file" accept="video/*">
           <video id="sourceVideo" hidden muted playsinline preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
-          <img id="decodedVideoPreview" hidden alt="Local decoded video preview; pauses on the confirmed full-body frame" style="width:100%;max-height:300px;object-fit:contain">
-          <small>Video plays on the left while full-body visibility is checked. After two qualifying frames, playback pauses at the captured frame and the scan starts on the right. Unsupported browser codecs use a sampled local preview. No reference marker needed.</small>
+          <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;max-height:300px;object-fit:contain">
+          <small>A complete near-camera frame is accepted after two consecutive checks of the same person. If no close, complete frame is found, the best stable full-body frame is scanned at the end.</small>
         </div>
         <div class="detection-panel">
           <div class="detection-title">Detecting Person</div>
@@ -297,10 +297,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
               <div class="detection-sweep" aria-hidden="true"></div>
             </div>
           </div>
-          <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a full-body frame automatically.</div>
+          <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a high-confidence full-body frame.</div>
         </div>
       </div>
-      <button id="cancelVideo" class="upload-submit" type="button" disabled>CANCEL</button>
       <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
       <p class="under-cta">DEMO ESTIMATES ONLY: scale assumes a 20 cm detected face height. Real height cannot be measured from an uncalibrated video. No vehicle commands.</p>
     </div>
@@ -535,7 +534,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     detectionImage.src = dataUrl;
     detectionColorImage.src = dataUrl;
     prepareDetectionView();
-    status.textContent = `Full body captured at ${timestamp.toFixed(2)} s. Running automatic demo analysis…`;
+    status.textContent = `Analyzing the closest complete frame captured at ${timestamp.toFixed(2)} s…`;
     const scanAnimation = startDetectionAnimation(signal);
     try {
       const response = await fetch("/analyze", {
@@ -576,7 +575,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     } catch (error) {
       detectionViewport.classList.remove("scanning", "detected");
       clearDetectionStatusTimers();
-      detectionStatus.textContent = signal.aborted ? "Video analysis cancelled." : error.message;
+      detectionStatus.textContent = signal.aborted ? "Video analysis interrupted." : error.message;
       throw error;
     }
     },
@@ -585,7 +584,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       detectionViewport.classList.remove("scanning", "detected");
       detectionImage.removeAttribute("src");
       detectionColorImage.removeAttribute("src");
-      detectionStatus.textContent = "Searching video for a full-body frame…";
+      detectionStatus.textContent = "Searching video for a high-confidence full-body frame…";
       for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "morphologyConfidence", "faceConfidence"]) {
         document.getElementById(id).textContent = "\u2014";
       }
@@ -731,6 +730,51 @@ class _HmiHandler(BaseHTTPRequestHandler):
             logger.exception("Local video preview failed")
             emit({"error": "Local video preview failed. Check server/model logs."})
 
+    @staticmethod
+    def _same_person_track(
+        previous: dict[str, float] | None,
+        current: dict[str, float] | None,
+    ) -> bool:
+        if previous is None:
+            return current is not None
+        if current is None:
+            return False
+
+        intersection_width = max(
+            0.0,
+            min(previous["x2"], current["x2"])
+            - max(previous["x1"], current["x1"]),
+        )
+        intersection_height = max(
+            0.0,
+            min(previous["y2"], current["y2"])
+            - max(previous["y1"], current["y1"]),
+        )
+        intersection = intersection_width * intersection_height
+        previous_area = max(0.0, previous["x2"] - previous["x1"]) * max(
+            0.0, previous["y2"] - previous["y1"]
+        )
+        current_area = max(0.0, current["x2"] - current["x1"]) * max(
+            0.0, current["y2"] - current["y1"]
+        )
+        union = previous_area + current_area - intersection
+        overlap = intersection / union if union > 0 else 0.0
+        previous_center = (
+            (previous["x1"] + previous["x2"]) / 2,
+            (previous["y1"] + previous["y2"]) / 2,
+        )
+        current_center = (
+            (current["x1"] + current["x2"]) / 2,
+            (current["y1"] + current["y2"]) / 2,
+        )
+        center_distance = float(
+            np.hypot(
+                previous_center[0] - current_center[0],
+                previous_center[1] - current_center[1],
+            )
+        )
+        return overlap >= 0.05 or center_distance <= 0.08 * np.sqrt(2)
+
     def _capture_video(
         self, content_length: int, preview: Callable[[dict], None] | None = None
     ) -> dict:
@@ -753,6 +797,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 samples = min(240, max(1, int(np.ceil(count / fps * 2))), int(count))
                 reason = "No suitable person detected."
                 confirmations = 0
+                tracked_box = None
+                recent_observations = []
+                best_observation = None
+                best_quality = -1.0
                 for index in range(samples):
                     frame_number = min(int(count) - 1, int((index + .5) * count / samples))
                     capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
@@ -771,22 +819,67 @@ class _HmiHandler(BaseHTTPRequestHandler):
                         data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode()
                         preview({"type": "frame", "image": data_url, "timestamp": frame_number / fps})
                     result = self._probe_image(image)
-                    confirmations = confirmations + 1 if result["eligible"] else 0
-                    if result["eligible"] and (preview is None or confirmations >= 2):
+                    current_box = result["track_box"]
+                    valid_candidate = bool(
+                      result["eligible"]
+                      and result["confident"]
+                      and current_box is not None
+                    )
+                    same_track = (
+                      self._same_person_track(tracked_box, current_box)
+                      if tracked_box is not None
+                      else valid_candidate
+                    )
+                    if same_track:
+                        tracked_box = current_box
+                    eligible = valid_candidate and same_track
+                    confirmations = confirmations + 1 if eligible else 0
+                    if eligible:
                         if data_url is None:
                             ok, encoded = cv2.imencode(".jpg", image)
                             if not ok:
                                 raise ValueError("Could not encode the captured video frame.")
                             data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode()
-                        return {
+                        observation = {
                             "image": data_url,
                             "timestamp": frame_number / fps,
+                            "quality_score": result["quality_score"],
+                            "confidence_score": result["confidence_score"],
+                          "relative_height": result["relative_height"],
+                          "near_camera": result["near_camera"],
                         }
-                    reason = result["reason"] or "Full body appeared only once; a second qualifying frame is required."
-                raise ValueError(
-                    f"No suitable full-body frame in {samples} samples. {reason} "
-                    "Use one upright front-facing person with head and feet inside the frame."
-                )
+                        recent_observations.append(observation)
+                        if len(recent_observations) > 3:
+                          recent_observations.pop(0)
+                        confirmations = len(recent_observations)
+                        if confirmations >= 2 and observation["near_camera"]:
+                          return max(
+                            recent_observations,
+                            key=lambda candidate: candidate["quality_score"],
+                          )
+                        if confirmations >= 3:
+                          for candidate in recent_observations:
+                            if candidate["quality_score"] > best_quality:
+                              best_observation = candidate
+                              best_quality = candidate["quality_score"]
+                        reason = (
+                          f"Tracking complete body: {confirmations}/3 consecutive frames."
+                        )
+                    else:
+                        recent_observations.clear()
+                        confirmations = 0
+                        reason = result["reason"] or (
+                            "Detection confidence is below the required threshold."
+                            if same_track
+                            else "The detected person changed."
+                        )
+                if best_observation is None:
+                  raise ValueError(
+                    f"No high-confidence complete-body frame in {samples} samples. "
+                    f"Required confidence is 82%. {reason} "
+                    "Move closer while keeping the head and both feet inside the frame."
+                  )
+                return best_observation
             finally:
                 capture.release()
 
@@ -805,11 +898,20 @@ class _HmiHandler(BaseHTTPRequestHandler):
         required = (0, 5, 6, 11, 12, 13, 14, 15, 16)
         if any(
             i not in points
-            or points[i].confidence < max(.5, Settings().keypoint_threshold)
+            or points[i].confidence < max(.4, Settings().keypoint_threshold * .8)
             or not (w * .01 <= points[i].x <= w * .99 and h * .01 <= points[i].y <= h * .99)
             for i in required
         ):
             return "Head, shoulders, hips, knees and ankles must all be clearly visible."
+        head_gap = points[0].y - box.y1
+        ankle_y = max(points[15].y, points[16].y)
+        ankle_box_gap = box.y2 - ankle_y
+        if not (
+            0 <= head_gap <= box.height * .2
+            and 0 <= ankle_box_gap <= box.height * .22
+            and ankle_y <= h * .93
+        ):
+          return "Keep the full head and both feet visible with space below the ankles."
         if not (
             points[0].y < min(points[5].y, points[6].y)
             and max(points[5].y, points[6].y) < min(points[11].y, points[12].y)
@@ -832,6 +934,17 @@ class _HmiHandler(BaseHTTPRequestHandler):
         result = cast(DriverPoseEstimator, self.pose_estimator).estimate(image, 0, 0.0)
         reason = self._full_body_reason(result, image)
         pose = result.driver
+        frame_height, frame_width = image.shape[:2]
+        track_box = None
+        if result.detected_people == 1 and pose is not None:
+            box = pose.bounding_box
+            track_box = {
+                "x1": box.x1 / frame_width,
+                "y1": box.y1 / frame_height,
+                "x2": box.x2 / frame_width,
+                "y2": box.y2 / frame_height,
+            }
+        face = None
         if reason is None and pose is not None:
             if self.face_detector is None:
                 self.__class__.face_detector = FaceHeightDetector()
@@ -840,7 +953,52 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 reason = "A clear front-facing face is needed for the uncalibrated demo scale."
             elif not 120 <= pose.bounding_box.height * 20 / face.height <= 230:
                 reason = "Face-scale demo estimate is outside 120-230 cm; use a clearer upright frontal view."
-        return {"eligible": reason is None, "reason": reason}
+        confidence_score = 0.0
+        quality_score = 0.0
+        relative_height = 0.0
+        near_camera = False
+        if reason is None and pose is not None and face is not None:
+            keypoints = {point.index: point for point in pose.keypoints}
+            keypoint_confidence = float(
+                np.mean(
+                    [
+                        keypoints[index].confidence
+                        for index in (0, 5, 6, 11, 12, 13, 14, 15, 16)
+                    ]
+                )
+            )
+            confidence_product = (
+                np.clip(pose.bounding_box.confidence, 0.0, 1.0)
+                * np.clip(keypoint_confidence, 0.0, 1.0)
+                * np.clip(face.confidence, 0.0, 1.0)
+            )
+            confidence_score = float(np.cbrt(confidence_product))
+            box = pose.bounding_box
+            relative_height = min(box.height / max(frame_height, 1), 1.0)
+            head_coverage = 1 - (keypoints[0].y - box.y1) / box.height
+            ankle_coverage = 1 - (
+              box.y2 - max(keypoints[15].y, keypoints[16].y)
+            ) / box.height
+            completeness = min(head_coverage, ankle_coverage)
+            quality_score = (
+              relative_height
+              * completeness
+              * (0.8 + 0.2 * confidence_score)
+            )
+            near_camera = relative_height >= 0.68
+        return {
+            "eligible": reason is None,
+            "reason": reason,
+            "confidence_score": confidence_score,
+            "confident": (
+                reason is None
+                and confidence_score >= 0.70
+            ),
+            "quality_score": quality_score,
+            "relative_height": relative_height,
+            "near_camera": near_camera,
+            "track_box": track_box,
+        }
 
     def _analyze_payload(self, payload: object) -> dict:
         if not isinstance(payload, dict):

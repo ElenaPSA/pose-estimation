@@ -1,7 +1,7 @@
 import cv2
 
-input_file = "Video_Bastien.mp4"
-output_file = "rotated.mp4"
+input_file = "20261110_155134_video2.mp4"
+output_file = "rotated_6.mp4"
 
 cap = cv2.VideoCapture(input_file)
 

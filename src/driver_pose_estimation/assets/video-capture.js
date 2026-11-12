@@ -26,15 +26,30 @@ const VideoCapture = (() => {
       action();
     });
   }
+  function samePerson(previous, current) {
+    if (!previous) return Boolean(current);
+    if (!current) return false;
+    const width = Math.max(0, Math.min(previous.x2, current.x2) - Math.max(previous.x1, current.x1));
+    const height = Math.max(0, Math.min(previous.y2, current.y2) - Math.max(previous.y1, current.y1));
+    const intersection = width * height;
+    const previousArea = Math.max(0, previous.x2 - previous.x1) * Math.max(0, previous.y2 - previous.y1);
+    const currentArea = Math.max(0, current.x2 - current.x1) * Math.max(0, current.y2 - current.y1);
+    const union = previousArea + currentArea - intersection;
+    const overlap = union > 0 ? intersection / union : 0;
+    const previousX = (previous.x1 + previous.x2) / 2;
+    const previousY = (previous.y1 + previous.y2) / 2;
+    const currentX = (current.x1 + current.x2) / 2;
+    const currentY = (current.y1 + current.y2) / 2;
+    const distance = Math.hypot(previousX - currentX, previousY - currentY);
+    return overlap >= .05 || distance <= .08 * Math.SQRT2;
+  }
   function mount({captured, reset}) {
     const input = document.getElementById("videoFile");
     const video = document.getElementById("sourceVideo");
     const canvas = document.createElement("canvas");
     const status = document.getElementById("profileStatus");
-    const cancel = document.getElementById("cancelVideo");
     const preview = document.getElementById("decodedVideoPreview");
     let controller = null, url = null;
-    cancel.addEventListener("click", () => controller?.abort());
     window.addEventListener("pagehide", () => {
       controller?.abort();
       if (url) URL.revokeObjectURL(url);
@@ -45,7 +60,6 @@ const VideoCapture = (() => {
       controller = new AbortController();
       const {signal} = controller;
       input.disabled = true;
-      cancel.disabled = false;
       reset();
       video.hidden = true;
       preview.hidden = true;
@@ -124,8 +138,12 @@ const VideoCapture = (() => {
         await video.play();
         let confirmations = 0;
         let examined = 0;
+        let trackedBox = null;
+        let recentObservations = [];
+        let bestObservation = null;
+        let bestQuality = -1;
         let reason = "No suitable person detected.";
-        while (examined < 240) {
+        while (!video.ended) {
           signal.throwIfAborted();
           const time = video.currentTime;
           status.textContent = `Playing video / checking full body at ${time.toFixed(2)} s. ${reason}`;
@@ -141,21 +159,66 @@ const VideoCapture = (() => {
           if (!response.ok) throw new Error(result.error || "Full-body search failed.");
           signal.throwIfAborted();
           examined++;
-          confirmations = result.eligible ? confirmations + 1 : 0;
-          if (confirmations >= 2) {
-            video.pause();
-            if (Math.abs(video.currentTime - time) > .001) {
-              await waitFor(video, "seeked", () => { video.currentTime = time; }, signal);
+          const currentBox = result.track_box;
+          const validCandidate = result.eligible && result.confident && currentBox;
+          const sameTrack = trackedBox
+            ? samePerson(trackedBox, currentBox)
+            : Boolean(validCandidate);
+          if (sameTrack) trackedBox = currentBox;
+          const confident = Boolean(validCandidate && sameTrack);
+          if (confident) {
+            const observation = {
+              image,
+              timestamp: time,
+              quality: Number(result.quality_score) || 0,
+              relativeHeight: Number(result.relative_height) || 0,
+              nearCamera: Boolean(result.near_camera)
+            };
+            recentObservations.push(observation);
+            if (recentObservations.length > 3) recentObservations.shift();
+            confirmations = recentObservations.length;
+            if (confirmations >= 2 && observation.nearCamera) {
+              const selectedObservation = recentObservations.reduce(
+                (best, candidate) => candidate.quality > best.quality ? candidate : best
+              );
+              video.pause();
+              if (Math.abs(video.currentTime - selectedObservation.timestamp) > .001) {
+                await waitFor(video, "seeked", () => {
+                  video.currentTime = selectedObservation.timestamp;
+                }, signal);
+              }
+              status.textContent = `Complete near-camera frame found. Scanning at ${selectedObservation.timestamp.toFixed(2)} s…`;
+              await captured(selectedObservation.image, selectedObservation.timestamp, signal);
+              return;
             }
-            await captured(image, time, signal);
-            return;
+            if (confirmations >= 3) {
+              for (const candidate of recentObservations) {
+                if (candidate.quality > bestQuality) {
+                  bestObservation = candidate;
+                  bestQuality = candidate.quality;
+                }
+              }
+            }
+            reason = observation.nearCamera
+              ? `Near-camera frame confirmed ${confirmations}/3 times.`
+              : `Tracking the same complete body: ${confirmations}/3 consecutive frames.`;
+          } else {
+            recentObservations = [];
+            confirmations = 0;
+            reason = result.eligible && sameTrack
+              ? "Detection confidence is below the required level."
+              : result.reason || "The detected person changed or was not confirmed.";
           }
-          reason = result.eligible ? "Full body found; confirming in another frame…" : result.reason;
+          status.textContent = `Playing video / checking ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
           if (video.ended) break;
           await new Promise(resolve => setTimeout(resolve, 500));
           if (video.ended) break;
         }
-        throw new Error(`No confirmed full-body frame in ${examined} checks. ${reason} Use one upright, front-facing person with head and feet inside the frame and a clear face.`);
+        if (!bestObservation) {
+          throw new Error(`No high-confidence complete-body frame in ${examined} checks. ${reason} Move closer while keeping the head and both feet inside the frame.`);
+        }
+        status.textContent = `Video ended. Scanning the closest complete frame at ${bestObservation.timestamp.toFixed(2)} s…`;
+        await captured(bestObservation.image, bestObservation.timestamp, signal);
       } catch (error) {
         status.textContent = signal.aborted ? "Video analysis cancelled. Choose a video to try again." :
           error.name === "TimeoutError" ? "Local inference timed out. Check the server/model setup and try again." :
@@ -165,7 +228,6 @@ const VideoCapture = (() => {
         video.pause();
         input.disabled = false;
         input.value = "";
-        cancel.disabled = true;
         controller = null;
       }
     });
