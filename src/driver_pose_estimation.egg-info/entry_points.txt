@@ -1,0 +1,4 @@
+[console_scripts]
+driver-pose = driver_pose_estimation.main:run
+driver-pose-capture = driver_pose_estimation.morphology_capture:run
+driver-seat-hmi = driver_pose_estimation.seat_hmi:run

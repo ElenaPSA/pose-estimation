@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: driver-pose-estimation
+Version: 0.2.0
+Summary: Driver pose estimation and simulated seat comfort agent.
+Author: Elena Lopez Tomas
+License: MIT
+Requires-Python: <3.15,>=3.10
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: opencv-python>=4.9
+Requires-Dist: ultralytics>=8.3
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"

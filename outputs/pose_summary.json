@@ -1,0 +1,9 @@
+{
+  "frames_read": 738,
+  "frames_processed": 737,
+  "frames_skipped": 0,
+  "frames_with_driver": 737,
+  "frames_without_driver": 0,
+  "elapsed_seconds": 178.4127739998512,
+  "average_inference_time_ms": 193.19337828140428
+}

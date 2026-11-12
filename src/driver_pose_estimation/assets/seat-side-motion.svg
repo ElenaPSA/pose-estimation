@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 314 300">
+  <rect width="314" height="300" fill="#0b1521"/>
+  <path d="M25 225H290M180 265V45" fill="none" stroke="#7193ba"/>
+  <path d="M282 220L290 225L282 230M175 53L180 45L185 53" fill="none" stroke="#7193ba"/>
+  <g fill="#9aa9bc" font-family="Arial" font-size="11">
+    <text x="220" y="280">+X forward</text>
+    <text x="185" y="42">+Z up</text>
+    <text x="20" y="245">Rear</text>
+    <text x="242" y="245">Front</text>
+  </g>
+  <g fill="#454f5e" stroke="#9aa9bc" stroke-width="2">
+    <path d="M180 211Q226 193 270 204L274 222H180Z"/>
+    <path d="M180 210L153 110Q148 97 140 104L132 112Q129 119 134 134L163 215Z"/>
+    <rect x="129" y="65" width="23" height="34" rx="8" transform="rotate(-15 140 99)"/>
+    <rect x="185" y="226" width="80" height="8" rx="3"/>
+    <circle cx="177" cy="214" r="13"/>
+  </g>
+  <circle cx="180" cy="225" r="4" fill="#6cc7c2"/>
+  <text x="114" y="296" fill="#6cc7c2" font-family="Arial" font-size="10">O = forward / lowest datum</text>
+</svg>

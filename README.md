@@ -672,61 +672,125 @@ driver-seat-hmi
 
 Or run it as a module with `python -m driver_pose_estimation.seat_hmi`.
 It opens on `http://127.0.0.1:8765`; use `--port` to select another port.
-Upload one frontal image. After you press **Analyze image**, a detection panel
-beside the preview runs a five-second grayscale scan while local person
-detection runs. When the scan finishes, the detected person's actual bounding
-box is outlined in orange and connected at its four corners to an illustrated
-camera at the lower left. The original image color is restored only inside the
-detected box; the rest of the image remains grayscale. The scan effect is
-simulated; the box comes from the pose detector's result. Enter the physical
-length of a vertical reference marker visible beside the person, then click the
-marker's two endpoints in the preview before selecting **Analyze image**. YOLO
-pose inference and morphology analysis run locally; uploaded image bytes are not
-saved. The image must be JPEG, PNG, or WebP and smaller than 8 MB. Use an
-upright, full-body view with the marker and person at the same distance from the
-camera and in the same plane.
+Select a browser-playable video (MP4/H.264 or WebM, under 500 MB).
+The browser plays it visibly on the left, while frames from the live playback
+are checked sequentially (at least 0.5 seconds between checks, capped at 240).
+Inference latency can reduce the sampling rate; brief full-body appearances
+between checks can be missed. The local
+`/probe-frame` endpoint checks each frame sequentially using YOLO pose detection.
+Selection requires exactly one person, an uncropped box with a 1% edge margin,
+confident nose, shoulder, hip, knee and ankle landmarks, an upright pose, and a
+clear YuNet face. These are visibility heuristics, not proof of full-body quality.
+Two consecutive eligible frames are required, not just a single detection.
+Playback then pauses and seeks back to the exact second captured frame before
+the five-second grayscale scan and `/analyze` request start on the right.
+The source remains visible and frozen on the left throughout analysis.
+These checks do not prove identity continuity or measurement accuracy.
+If browser decoding fails, `/stream-video` automatically uses the local OpenCV
+decoder, streaming a visible sampled JPEG preview to the left panel, with the
+same two-frame pose/face confirmation. It samples about twice per second across
+the duration, capped at 240 evenly spaced samples; the browser displays these
+in sequence, at most two per second, not full-frame-rate playback. This
+fallback temporarily stores the uploaded video in an isolated system temporary
+directory, deleted when capture succeeds or fails. The final preview frame
+stays frozen on the left while the detection panel scans on the right.
+Cancel aborts the browser request but an ongoing
+server-side search can finish before its temporary file is removed.
+No reference-length entry,
+marker clicks or Analyze Image button are required. Cancel stops the browser
+workflow; a model inference already running on the server may finish.
+Invalid/unsupported videos, missing full-body frames and inference errors are
+shown explicitly. Choose the video again to retry.
 
-The HMI uses the frontal YOLO person-detection box, scaled by the reference
-marker, as its primary height estimate. The box must include the entire person
-from the top of the head to the soles. YOLO pose landmarks provide approximate
-shoulder/hip widths, and YuNet face detection provides approximate face height.
-Torso and leg measurements and the segment-based height cross-check are
-unavailable because they require a side-view image. The image upload/analysis
-workflow is separate from the manual segment proportion controls. There are no
-manual segment-proportion controls in the HMI. YuNet face detection is used
-only for the approximate face-height
-measurement and model-confidence display; a missed face no longer prevents the
-full-body height estimate. Keep the person and marker upright, coplanar, and
-at a similar camera distance. The estimator remains an approximate 2D
-measurement, not a learned physical-height predictor. YuNet model weights and
+When analysis and the scan finish, the actual detected box is outlined in orange
+and connected at its four corners to an illustrated camera. Original color is
+restored only within the box; the rest remains grayscale. Reduced-motion mode
+skips the animation delay. Normally only downscaled JPEG frames (longest side
+1280 px) are sent to the local server. The fallback uploads the video locally;
+neither mode saves permanent media or sends it externally.
+
+**Uncalibrated demo estimates, not physical measurements:** an ordinary video
+does not identify absolute centimetres. The selected demo approach assumes
+the detected face-box height is **20 cm**, then computes
+`height = person-box height in pixels / face-box height in pixels * 20 cm`.
+Shoulder/hip widths inherit this same assumed scale. The displayed face height
+is therefore the assumption, not an independently measured dimension.
+Frames producing heights outside 120-230 cm are rejected, not clamped.
+This heuristic can be substantially wrong due to face shape, perspective,
+camera angle and detector box quality. It is not a learned height predictor.
+Real measurements still require calibrated camera/scene geometry or a known
+reference. The legacy calibrated `/analyze` payload remains supported for API
+callers, but is no longer exposed in this automatic video UI.
+Torso/leg measurements are unavailable. Build class remains a rough
+person-box-width heuristic. Size and seat targets use the accepted demo height.
+YuNet model weights and
 license are in
 `src/driver_pose_estimation/assets/`; the model comes from
 [OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
 
-Build category remains a rough person-box-width heuristic. Perspective,
-clothing, pose, person-box quality, landmark quality, and marker placement
-affect estimates, so treat them as approximate prototype values. If a person
-box is detected but required pose landmarks are incomplete, the HMI still shows
-the detected box and reports unavailable shoulder/hip measurements. If no
-person is detected or calibration is invalid, the HMI reports an error instead
-of filling the profile. The older normalized morphology JSON capture remains
-available via `driver-pose-capture`.
+Perspective, clothing and landmark quality also affect the estimates.
+The older normalized morphology JSON capture remains available via
+`driver-pose-capture`.
 
 The seat parameters are illustrative demo values for the HMI only. The
-“Preview simulated adjustment” button plays an on-screen animation of the
-illustrative seat-height and cushion-depth movements using the currently
-displayed demo values. The configuration vector includes three movement
-illustrations based on the seated-driver image. Orange arrows and values are
-overlaid on the images; vertical and horizontal arrow directions reverse for
-negative offsets, and the backrest arc reverses for recline below its
-reference angle.
-The supplied seat-adjustment scheme remains fixed as the
-reference in its original colors; an orange-tinted cutout of the large seat
-moves over it when previewed. The three smaller diagrams remain unchanged.
-Clicking the button again replays the animation. The displayed fore/aft and
-vertical movement is amplified by 4.5x relative to the original preview for
-visibility and is not to scale; the animation does not actuate a seat or send
-vehicle commands.
+full-width Kinematic Studio uses one detailed right-facing SVG seat model for
+the three static movement cards and the combined animation. The supplied raster
+sheet/crops are no longer displayed: their left-facing seat and old origin labels
+conflict with the confirmed convention. No front or top views are shown.
+The model, constants, UI and animation share `assets/seat-studio.js`.
+
+- Fixed origin O is the location of the marked cushion-bottom point with the
+  seat **fully rearward and lowest**. This is not a measured automotive SRP.
+- X positive is forward: **0 mm fully rearward, 255 mm fully forward**.
+- Z positive is upward; travel above the lowest setting is **0-80 mm**.
+  Floor-to-marker height is **70 + Z mm**, within **70-150 mm**.
+- Backrest recline is **15-55 degrees from vertical**, increasing rearward.
+- Y positive is vehicle-left; there is no simulated lateral movement.
+
+The wheel is always on the right, seat cushion points right and backrest reclines
+left. A reference panel before the movement cards specifies the agreed
+**nominal comfort reference: X = 127.5 mm, Z = 40 mm (110 mm from floor),
+recline = 25 degrees**. This is a demonstration baseline, not a universal or
+validated comfortable position or the car's unknown current position.
+A dedicated right-facing gray-seat schematic above the three movement cards
+illustrates the fore/aft travel ruler, vertical travel ruler and recline sector
+from vertical. Reference markers locate X 127.5 mm, Z 40 mm and recline 25 degrees
+inside their respective limits. Floor heights and absolute reference values are
+also labelled. On narrow screens the detailed schematic scrolls horizontally
+within its panel to preserve label readability. The three movement cards and
+combined animation are unchanged.
+Static cards show one axis changing, keeping the other axes at this reference.
+All four figures show a filled gray reference seat behind a filled orange
+simulated seat. The slightly translucent orange seat allows overlap comparison;
+at zero movement the two poses coincide. Legends identify both colors.
+Dashed lines, separate orange accent lines and movement arrows are omitted.
+The main card values and live
+animation readouts are signed movements: `target - nominal comfort reference`.
+Secondary card captions retain absolute reference and target coordinates and
+physical travel ranges. Positive X is forward, positive Z upward, and positive
+recline more rearward; zero means no movement.
+
+The hero plays a cancellable 4.2-second sequence: fore/aft, elevation, then
+recline, with live numeric readouts, stage highlighting and a progress bar.
+Replay resets to the nominal comfort reference (zero signed movements), with
+its gray seat fixed throughout. Profile changes cancel any in-progress animation
+and show the new target immediately; stale animation callbacks cannot overwrite it.
+Reduced-motion preference shows the final pose immediately. Drawing displacement
+is 0.75 SVG units per mm on both axes with a shared hinge for the whole backrest
+and headrest. Rail/cushion shapes and hinge are illustrative, not vehicle CAD.
+There are no vehicle commands.
+
+Automatic height-band demo rules remain, not a calibrated morphology-to-comfort
+model: the former distances 0/15/28 mm rearward from the forward stop are rebased
+as `X = 255 - distance`, giving absolute **255/240/227 mm**.
+This changes coordinates, not physical target positions;
+vertical `round(base + 0.6 * (height - reference height))` is limited to 0-80 mm;
+backrest demo targets are 25/25/27 degrees from vertical. The reference heights
+are 158/178/195 cm and vertical bases 0/20/38 mm. Build category does not change
+these targets. Physical travel bounds are enforced, but do not validate comfort
+or mechanical reachability of combinations. The diagram does not create an
+ergonomic recommendation. Use stationary secured-vehicle evaluation and the
+manufacturer's seating/restraint guidance, not these demo targets as instructions.
 The profile height bands, parameter offsets, and recommendation rules require
 validation and vehicle-specific calibration before they could be considered
 for real use.

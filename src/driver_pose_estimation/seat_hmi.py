@@ -5,7 +5,9 @@ import base64
 import binascii
 import json
 import logging
+import tempfile
 import webbrowser
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -37,7 +39,7 @@ HTML = r"""<!doctype html>
 :root {
   color-scheme: dark;
   --bg: #060b12; --panel: #0d1724; --panel2: #111d2d; --line: #26364a;
-  --text: #eaf1fb; --muted: #9aa9bc; --blue: #5d8fe8;
+  --text: #eaf1fb; --muted: #9aa9bc; --accent: #ffb16d;
   --cyan: #6cc7c2; --green: #79c58f; --amber: #d8a15a;
   --coral: #f08a6e; --ink: #dfeaf8;
 }
@@ -52,10 +54,11 @@ button { color: inherit; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 20px;
   padding-bottom: 19px; border-bottom: 1px solid var(--line); }
 .brand { display: flex; gap: 13px; align-items: center; }
-.brand-mark { width: 43px; height: 43px; border-radius: 10px; background: var(--ink);
+.brand-mark { width: 43px; height: 43px; border-radius: 10px; background: #ffb16d;
   display: grid; place-items: center; color: #0d1724; font-size: 17px; font-weight: 750; }
 h1 { margin: 0; font-size: 17px; letter-spacing: .12em; font-weight: 750; }
 .sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.brand h1, .brand .sub { color: #ffb16d; }
 .top-right { color: var(--muted); text-align: right; font-size: 11px; }
 .prototype { color: #f2d9bc; border: 1px solid #6a4a2f; border-radius: 5px;
   padding: 7px 10px; white-space: nowrap; background: rgba(118, 91, 66, 0.38); font-weight: 750; letter-spacing: .04em; }
@@ -65,16 +68,16 @@ h1 { margin: 0; font-size: 17px; letter-spacing: .12em; font-weight: 750; }
 .card { border: 1px solid var(--line); background: var(--panel);
   border-radius: 9px; padding: 18px 20px; box-shadow: 0 3px 12px rgba(2, 6, 12, 0.5); }
 .step { display: flex; gap: 9px; align-items: center; margin: 0 0 14px;
-  font-size: 12px; letter-spacing: .08em; font-weight: 750; color: var(--muted); }
+  font-size: 12px; letter-spacing: .08em; font-weight: 750; color: #ffb16d; }
 .info { margin-left: auto; color: var(--muted); border: 1px solid #475d78;
   border-radius: 4px; width: 18px; height: 18px; text-align: center; }
 .info:focus-visible, button:focus-visible, input:focus-visible {
   outline: 3px solid #d47734; outline-offset: 3px;
 }
 .height-line { display: flex; align-items: baseline; gap: 8px; }
-.height-line output { color: var(--ink); font-size: 30px; min-width: 56px; font-weight: 650; }
+.height-line output { color: #ffb16d; font-size: 30px; min-width: 56px; font-weight: 650; }
 .height-line span { color: var(--muted); }
-input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
+input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .range-wrap { padding: 0 6px; }
 .range-labels { display: flex; justify-content: space-between; padding: 0 4px;
   color: var(--muted); font-size: 10px; }
@@ -83,18 +86,18 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
   background: #121f2f; cursor: pointer; padding: 10px 7px; text-align: center;
   transition: .15s ease; }
 .choice:hover { border-color: #58779a; background: #18273d; transform: translateY(-1px); }
-.choice.active { border: 2px solid var(--blue); background: #182d46; box-shadow: inset 0 -3px 0 var(--blue); }
+.choice.active { border: 2px solid var(--accent); background: #35271f; box-shadow: inset 0 -3px 0 var(--accent); }
 .person-icon { width: 31px; height: 31px; display: grid; place-items: center;
-  margin: 0 auto 4px; border-radius: 50%; color: #eaf1fb; background: var(--blue);
+  margin: 0 auto 4px; border-radius: 50%; color: #20150c; background: var(--accent);
   font-size: 12px; line-height: 1; font-weight: 750; }
 .choice strong { display: block; font-size: 12px; font-weight: 700; }
 .choice small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
 .body-types .choice { min-height: 62px; padding-top: 9px; }
 .body-types .person-icon { width: 22px; height: 22px; margin-bottom: 3px;
-  font-size: 14px; color: #eaf1fb; background: var(--blue); }
+  font-size: 14px; color: #20150c; background: var(--accent); }
 .slider-row { margin: 12px 0 3px; }
 .slider-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
-.slider-head output { color: var(--blue); font-weight: 700; }
+.slider-head output { color: var(--accent); font-weight: 700; }
 .slider-wrap { display: grid; grid-template-columns: 48px 1fr 48px; gap: 7px; align-items: center; }
 .slider-wrap small { color: var(--muted); font-size: 11px; }
 .captured { margin-top: 12px; padding: 11px; border: 1px dashed #465f7e;
@@ -102,13 +105,12 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
 .captured input { display: block; width: 100%; margin-top: 7px; color: var(--text); font-size: 12px; }
 .upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .upload-view { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; }
-.upload-view label, .calibration label { display: block; font-size: 11px; font-weight: 700; }
-.upload-view canvas { display: block; width: 100%; max-height: 240px; margin-top: 8px; object-fit: contain; background: #0b1521; }
-.upload-view small, .calibration small { color: var(--muted); font-size: 10px; }
+.upload-view label { display: block; font-size: 11px; font-weight: 700; }
+.upload-view small { color: var(--muted); font-size: 10px; }
 .detection-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: #09131f; }
 .detection-title { color: var(--ink); font-size: 11px; font-weight: 700; }
 .detection-viewport { display: flex; justify-content: center; width: 100%; margin-top: 8px; }
-.detection-stage { position: relative; flex: none; max-width: 100%; max-height: 240px; overflow: hidden; background: #0b1521; }
+.detection-stage { position: relative; flex: none; max-width: 100%; max-height: 300px; overflow: hidden; background: #0b1521; }
 .detection-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .detection-viewport.scanning #detectionImage { animation: grayscale-reveal 5s ease-out both; }
 .detection-viewport.detected #detectionImage { filter: grayscale(1); }
@@ -131,29 +133,95 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
   100% { transform: translateY(var(--scan-distance)); opacity: .75; }
 }
 .detection-status { margin-top: 6px; color: var(--muted); font-size: 10px; }
-.calibration { display: flex; align-items: end; gap: 10px; margin-top: 12px; }
-.calibration input { width: 105px; padding: 7px; border: 1px solid var(--line); border-radius: 4px; }
-.upload-submit { margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 5px; background: var(--blue); color: #eaf1fb; font-weight: 700; cursor: pointer; }
+.upload-submit { margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 5px; background: var(--accent); color: #20150c; font-weight: 700; cursor: pointer; }
 .upload-submit:disabled { opacity: .5; cursor: wait; }
 .upload-status { margin-top: 9px; font-size: 11px; color: var(--muted); }
 .analysis-card { grid-column: 1 / -1; }
 .result-title { color: var(--muted); font-size: 11px; letter-spacing: .1em; margin-bottom: 12px; font-weight: 750; }
+.result-title.measurements-title { color: #ffb16d; }
 .parameters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .parameter { display: grid; grid-template-columns: 25px 1fr; gap: 7px; align-items: center;
   min-height: 58px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); }
-.movement-figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.movement-row { position: relative; min-width: 0; overflow: hidden; aspect-ratio: 1.05 / 1;
-  border: 1px solid var(--line); border-radius: 6px; background: #07111c; }
-.movement-row svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
-.movement-row .movement-art { width: 100%; height: 100%; object-fit: cover; }
-.movement-row .movement-arrow { fill: none; stroke: #f27b16; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 2px #15110d); }
-.movement-row #horizontalMovementArrow { stroke-width: 2.5; }
-.movement-label { position: absolute; top: 7px; left: 7px; z-index: 1; padding: 2px 4px; border-radius: 3px;
-  background: rgba(5, 10, 17, .68); color: #ff861c; font-size: 10px; font-weight: 700; }
-.movement-copy { position: absolute; right: 9px; bottom: 5px; z-index: 1; display: flex; align-items: baseline; gap: 2px;
-  padding: 1px 4px; border-radius: 3px; background: rgba(5, 10, 17, .68); color: #ff861c; font-size: 15px; font-weight: 800; }
-.movement-copy .movement-number { color: #ff861c; font-size: 13px; }
-.movement-copy .movement-unit { color: #ff861c; font-size: 15px; font-weight: 800; }
+.movement-figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.movement-row { min-width: 0; overflow: hidden; border: 1px solid #2c3b50; border-radius: 14px; background: #0b1523; }
+.movement-row svg { width: 100%; display: block; }
+.movement-label { color: #ffb16d; font-size: 16px; font-weight: 650; }
+#seatStudio { padding: clamp(18px, 3vw, 40px); background: linear-gradient(140deg, #142236, #0b1421 55%, #101c2d);
+  border: 1px solid #344962; border-radius: 18px; box-shadow: 0 24px 80px #02060e88; }
+.studio-heading { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
+.studio-heading h2 { font-size: clamp(25px, 3vw, 40px); margin: 8px 0; letter-spacing: -.035em; font-weight: 650; }
+.studio-heading p { color: #a9bad0; margin: 0; }
+.studio-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .16em; color: #ffb16d; }
+.studio-badge { border: 1px solid #705133; color: #ffc28f; border-radius: 30px; padding: 6px 12px; font-size: 10px; letter-spacing: .09em; white-space: nowrap; }
+.studio-reference-strip { display: flex; flex-wrap: wrap; gap: 12px 30px; padding: 18px 0 25px; color: #afc0d5; font-size: 12px; }
+.studio-reference-strip b { color: #ecf4ff; margin-right: 7px; }
+.studio-reference-strip i { color: #ffb16d; font-style: normal; margin: 0 5px; }
+.studio-comfort-reference { padding: 20px; margin-bottom: 24px; border: 1px solid #477b82; border-radius: 12px; background: #10232d; }
+.studio-comfort-reference h3 { margin: 8px 0; font-size: 22px; }
+.studio-reference-schema { margin: 18px 0; min-width: 0; }
+.studio-reference-schema svg { display: block; width: 100%; max-height: 580px; }
+@media (max-width: 650px) {
+  #seatStudio { min-width: 0; }
+  .studio-reference-schema { overflow-x: auto; }
+  .studio-reference-schema svg { min-width: 680px; }
+}
+.studio-comfort-reference .studio-reference-strip { padding: 10px 0; }
+.studio-comfort-reference p { margin: 4px 0 0; color: #b0c9d0; font-size: 12px; line-height: 1.7; }
+.studio-card-legend { grid-column: 1 / -1; color: #b0becf; font-size: 10px; line-height: 1.6; margin-top: 6px; }
+.studio-card-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #899099; margin-right: 5px; vertical-align: middle; }
+.studio-card-legend .studio-target-key { background: #ffb16d; margin-left: 8px; }
+.studio-card-heading { display: flex; justify-content: space-between; padding: 17px 18px 0; font-size: 10px; letter-spacing: .1em; color: #8fa6c3; }
+.studio-direction { color: #6083ad; }
+.studio-card-copy { display: grid; grid-template-columns: 1fr auto; padding: 0 20px 20px; gap: 6px; align-items: baseline; }
+.studio-card-copy output { color: #ffb16d; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.studio-card-copy output b { font-size: 20px; font-weight: 550; letter-spacing: -.04em; }
+.studio-card-copy output small { font-size: 13px; color: inherit; margin-left: 5px; }
+.studio-range { color: #90a5bf; font-size: 11px; grid-column: 1 / -1; }
+.studio-delta { color: #a4c6bf; font-size: 11px; grid-column: 1 / -1; }
+.studio-hero { margin-top: 24px; border: 1px solid #31445e; border-radius: 16px; overflow: hidden; background: #0b1523; }
+.studio-hero-top { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 24px 28px 18px; }
+.studio-hero-top h3 { font-size: 22px; font-weight: 550; margin: 5px 0 0; letter-spacing: -.02em; }
+.studio-play { cursor: pointer; border: 1px solid #ffb16d; background: linear-gradient(120deg, #ffc38c, #e4873c); color: #20150c; font-weight: 750;
+  letter-spacing: .04em; font-size: 11px; padding: 13px 18px; border-radius: 9px; box-shadow: 0 4px 24px #f18e3226; }
+.studio-play:hover { background: #ffd2a8; }
+.studio-play span { margin-left: 14px; }
+.studio-timeline { display: grid; grid-template-columns: repeat(4, 1fr); padding: 0 28px; gap: 10px; color: #7d93ae; font-size: 16px; font-weight: 600; line-height: 1.5; }
+.studio-timeline span { padding: 10px 0; border-top: 2px solid #26384e; }
+.studio-timeline span.active { border-color: #ffb16d; color: #ffc898; }
+.studio-timeline span.complete { border-color: #71ac9e; color: #9acabd; }
+.studio-stage { position: relative; }
+.studio-stage > svg { display: block; width: 100%; max-height: 610px; }
+.studio-stage-label { position: absolute; top: 18px; left: 28px; color: #6e8aa9; font-size: 14px; font-weight: 600; letter-spacing: .12em; }
+.studio-stage-label.studio-front { left: auto; right: 28px; }
+.studio-live { position: absolute; top: 64px; left: 28px; display: grid; gap: 12px; color: #98afc9; font: 17px "Segoe UI", sans-serif; }
+.studio-live b { color: #ffd1a6; font-size: inherit; font-weight: 600; font-variant-numeric: tabular-nums; }
+.studio-ghost { opacity: .85; pointer-events: none; filter: grayscale(1); }
+.studio-solid { opacity: .88; filter: drop-shadow(0 10px 9px #0008); }
+.studio-solid [stroke] { stroke: #ffc38c; }
+.studio-solid [fill]:not([fill="none"]):not([fill^="url("]) { fill: #87451f; }
+.studio-progress { height: 2px; background: #26364c; }
+.studio-progress i { display: block; width: 0; height: 100%; background: #ffb16d; box-shadow: 0 0 12px #f29b55; }
+.studio-legend { padding: 15px 28px 8px; display: flex; flex-wrap: wrap; gap: 12px 24px; color: #8fa4bf; font-size: 11px; }
+.studio-legend span:last-child { margin-left: auto; font-size: 9px; letter-spacing: .1em; }
+.studio-legend i { display: inline-block; background: #53647b; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+.studio-legend span:first-child i { background: #899099; }
+.studio-legend span:nth-child(2) i { background: #ffb16d; }
+#seatAnimationStatus { padding: 0 28px 20px; color: #a6b8ce; font-size: 12px; min-height: 42px; }
+.studio-details { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 28px; padding-top: 26px; border-top: 1px solid #2b3c53; }
+.studio-details h3 { font-size: 20px; font-weight: 550; margin: 8px 0; }
+.studio-details p { color: #a5b7cd; font-size: 12px; line-height: 1.8; }
+.studio-details b { color: #d7e5f7; }
+.studio-details .studio-disclaimer { color: #c3a78c; font-size: 11px; }
+@media (max-width: 650px) {
+  .studio-heading, .studio-hero-top { flex-direction: column; }
+  .studio-details { grid-template-columns: 1fr; gap: 15px; }
+  .studio-card-copy { padding: 0 15px 18px; }
+  .studio-timeline { padding: 0 16px; font-size: 14px; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .studio-stage-label { left: 14px; font-size: 12px; }
+  .studio-stage-label.studio-front { right: 14px; }
+  .studio-live { position: static; display: flex; flex-wrap: wrap; justify-content: space-around; padding: 0 10px 14px; }
+  .studio-live > span { white-space: nowrap; }
+}
 .param-icon { color: var(--coral); font-size: 16px; text-align: center; }
 .param-name { color: var(--muted); font-size: 11px; }
 .param-value { grid-column: 2; text-align: left; font-size: 13px; font-weight: 750; color: var(--ink); }
@@ -164,19 +232,6 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
 .cta:hover { background: #23354d; }
 .cta:disabled { opacity: .48; cursor: not-allowed; }
 .under-cta { text-align: center; color: var(--muted); font-size: 11px; margin-top: 8px; }
-.seat-scheme { position: relative; margin-top: 14px; overflow: hidden;
-  border: 1px solid var(--line); border-radius: 8px; background: #0b1521;
-  width: min(100%, 620px); margin-left: auto; margin-right: auto; aspect-ratio: 3 / 2; }
-.seat-scheme img { position: absolute; inset: 0; display: block; width: 100%;
-  height: 100%; object-fit: contain; }
-.seat-scheme .seat-proposal { opacity: 0; pointer-events: none; }
-#seatProposal { clip-path: polygon(0 55%, 12% 55%, 15% 53%, 23% 53%, 34% 55%, 39% 58%, 43% 60%, 46% 64%, 50% 67%, 55% 70%, 55% 100%, 0 100%); }
-#seatBackrestProposal { clip-path: polygon(41% 62%, 35% 58%, 35% 56%, 38% 47%, 42% 38%, 46% 28%, 48% 20%, 50% 14%, 53% 13%, 53% 26%, 51% 35%, 49% 45%, 47% 56%, 46% 62%); transform-origin: 41% 62%; }
-.seat-scheme-legend { display: flex; flex-wrap: wrap; gap: 14px;
-  color: var(--muted); font-size: 11px; margin-top: 8px; }
-.seat-scheme-legend span { display: inline-flex; gap: 6px; align-items: center; }
-.seat-scheme-legend i { width: 14px; height: 10px; border-radius: 2px; }
-.seat-scheme-status { color: var(--muted); font-size: 11px; margin-top: 6px; }
 .foot { margin-top: 20px; display: flex; justify-content: space-between; gap: 15px;
   color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 13px; }
 .foot strong { color: var(--coral); font-weight: 750; }
@@ -213,13 +268,14 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
 
   <main class="layout">
     <div class="card analysis-card">
-      <h2 class="step">LOAD, SCAN AND ANALYZE IMAGE</h2>
+      <h2 class="step">LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE</h2>
       <div class="upload-grid">
         <div class="upload-view">
-          <label for="frontalFile">Frontal image</label>
-          <input id="frontalFile" type="file" accept="image/jpeg,image/png,image/webp">
-          <canvas id="frontalCanvas" aria-label="Frontal image calibration preview"></canvas>
-          <small>Stand upright with your full body visible. Click the two ends of the vertical reference marker.</small>
+          <label for="videoFile">Driver video</label>
+          <input id="videoFile" type="file" accept="video/*">
+          <video id="sourceVideo" hidden muted playsinline preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
+          <img id="decodedVideoPreview" hidden alt="Local decoded video preview; pauses on the confirmed full-body frame" style="width:100%;max-height:300px;object-fit:contain">
+          <small>Video plays on the left while full-body visibility is checked. After two qualifying frames, playback pauses at the captured frame and the scan starts on the right. Unsupported browser codecs use a sampled local preview. No reference marker needed.</small>
         </div>
         <div class="detection-panel">
           <div class="detection-title">Detecting Person</div>
@@ -241,22 +297,17 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
               <div class="detection-sweep" aria-hidden="true"></div>
             </div>
           </div>
-          <div id="detectionStatus" class="detection-status" role="status">Upload an image, then press ANALYZE IMAGE to detect the person.</div>
+          <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a full-body frame automatically.</div>
         </div>
       </div>
-      <div class="calibration">
-        <label for="referenceLength">Reference length
-          <input id="referenceLength" type="number" min="10" max="250" step="0.1" value="100" aria-label="Reference marker length in centimetres">
-        </label>
-        <small>Marker must be vertical and in the same plane as you. The image is processed locally and not saved.</small>
-      </div>
-      <button id="analyzeImages" class="upload-submit" type="button">ANALYZE IMAGE</button>
-      <div id="profileStatus" class="upload-status" role="status">No images analyzed yet.</div>
+      <button id="cancelVideo" class="upload-submit" type="button" disabled>CANCEL</button>
+      <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
+      <p class="under-cta">DEMO ESTIMATES ONLY: scale assumes a 20 cm detected face height. Real height cannot be measured from an uncalibrated video. No vehicle commands.</p>
     </div>
     <section class="left">
       <div class="card">
-        <h2 class="step">DRIVER DIMENSIONS <span class="info" title="Height is estimated from the calibrated full-body detection box.">i</span></h2>
-        <div class="height-line"><output id="heightValue">178</output><span>cm estimated total height</span></div>
+        <h2 class="step">DRIVER DIMENSIONS <span class="info" title="Uncalibrated demo height assumes the detected face is 20 cm high; not a physical measurement.">i</span></h2>
+        <div class="height-line"><output id="heightValue">178</output><span>cm demo height (uncalibrated)</span></div>
         <div class="range-wrap"><input id="height" type="range" min="120" max="230" value="178" aria-label="Estimated driver height in centimetres">
           <div class="range-labels"><span>120</span><span>147</span><span>175</span><span>202</span><span>230 cm</span></div></div>
       </div>
@@ -280,16 +331,16 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
 
     <section class="right">
       <div class="card">
-        <div class="result-title">APPROXIMATE DRIVER MEASUREMENTS</div>
+        <div class="result-title measurements-title">APPROXIMATE DRIVER DEMO ESTIMATES</div>
         <div class="parameters">
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Estimated height</span><span class="param-value"><span id="measureHeight">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Shoulder width</span><span class="param-value"><span id="measureShoulder">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Hip width</span><span class="param-value"><span id="measureHip">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name">Face height</span><span class="param-value"><span id="measureFace">—</span><small>cm · approximate</small></span></div>
+          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name">Face height (assumed scale)</span><span class="param-value"><span id="measureFace">—</span><small>cm · not measured</small></span></div>
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Torso length</span><span class="param-value"><span id="measureTorso">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Leg length</span><span class="param-value"><span id="measureLegs">—</span><small>cm · upper + lower leg</small></span></div>
         </div>
-        <div id="measurementNote" class="under-cta">Height uses the frontal full-body detection box scaled by the reference marker. Keep the top of the head and the soles visible. Torso and leg measurements require a side-view image and are unavailable in this one-image workflow.</div>
+        <div id="measurementNote" class="under-cta">Uncalibrated demo estimates assume a 20 cm detected face height; they are not physical measurements. Torso and leg lengths are unavailable.</div>
       </div>
       <div class="card">
         <div class="result-title">MODEL PERFORMANCE</div>
@@ -307,51 +358,9 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
         </div>
         <div class="under-cta">Model confidence scores indicate detection certainty; they are not measurement-accuracy guarantees.</div>
       </div>
-      <div class="card">
-        <div class="result-title">CONFIGURATION VECTOR · SIMULATION</div>
-        <div class="movement-figures" aria-label="Diagrams of simulated seat movements">
-            <div class="movement-row">
-              <svg viewBox="0 0 314 300" role="img" aria-label="Seated driver illustration showing backrest recline movement">
-                <image class="movement-art" href="/assets/driver-seat-profile.png" x="0" y="0" width="314" height="300"/>
-                <path id="backrestMovementArrow" class="movement-arrow" d="M250 269 A28 28 0 0 1 278 241 M271 242 L278 241 L276 248"/>
-              </svg>
-              <span class="movement-label">Backrest Inclination</span>
-              <output class="movement-copy" id="movementBackrestValue" aria-label="Backrest Inclination"><span class="movement-number" id="backrest">100</span><span class="movement-unit">°</span></output>
-            </div>
-            <div class="movement-row">
-              <svg viewBox="0 0 314 300" role="img" aria-label="Seated driver illustration showing vertical seat movement">
-                <image class="movement-art" href="/assets/driver-seat-profile.png" x="0" y="0" width="314" height="300"/>
-                <path id="verticalMovementArrow" class="movement-arrow" d="M290 243 V197 M284 205 L290 197 L296 205"/>
-              </svg>
-              <span class="movement-label">Seat Height</span>
-              <output class="movement-copy" id="movementVerticalValue" aria-label="Seat Height"><span class="movement-number" id="seatHeight">+20</span><span class="movement-unit">mm</span></output>
-            </div>
-            <div class="movement-row">
-              <svg viewBox="0 0 314 300" role="img" aria-label="Seated driver illustration showing fore and aft seat movement">
-                <image class="movement-art" href="/assets/driver-seat-profile.png" x="0" y="0" width="314" height="300"/>
-                <path id="horizontalMovementArrow" class="movement-arrow" d="M88 278 H184 M176 272 L184 278 L176 284"/>
-              </svg>
-              <span class="movement-label">Seat Depth</span>
-              <output class="movement-copy" id="movementHorizontalValue" aria-label="Seat Depth"><span class="movement-number" id="seatDepth">+15</span><span class="movement-unit">mm</span></output>
-            </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="result-title">FIT SUMMARY</div>
-        <div style="color:var(--muted);font-size:11px">Values update from the selected demo profile, height and body build. The orange overlay previews the illustrative seat adjustment against the fixed reference position; no real seat is actuated.</div>
-        <button id="preview" class="cta" type="button">PREVIEW SIMULATED ADJUSTMENT</button>
-        <div class="under-cta">Click again at any time to replay from the fixed reference position.</div>
-        <div class="seat-scheme">
-          <img src="/assets/automotive-seat-adjustment-scheme.png" alt="Seat adjustment scheme with a fixed reference seat and three smaller diagrams showing fore-aft, height, and backrest movement.">
-          <img id="seatProposal" class="seat-proposal" src="/assets/automotive-seat-proposed-overlay.png" alt="" aria-hidden="true">
-          <img id="seatBackrestProposal" class="seat-proposal" src="/assets/automotive-seat-proposed-overlay.png" alt="" aria-hidden="true">
-        </div>
-        <div class="seat-scheme-legend">
-          <span><i style="background:#424d5d"></i>Fixed original position</span>
-          <span><i style="background:#f28c28"></i>Simulated seat position</span>
-        </div>
-        <div id="seatAnimationStatus" class="seat-scheme-status" role="status" aria-live="polite"></div>
-      </div>
+    </section>
+    <section id="seatStudio" class="card analysis-card" aria-label="Seat configuration vector simulation">
+      <noscript>Enable JavaScript to display the seat simulation.</noscript>
     </section>
   </main>
   <footer class="foot">
@@ -359,17 +368,15 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
     <span>Requires vehicle-specific calibration before real use.</span>
   </footer>
 </div>
+<script src="/assets/seat-studio.js"></script>
+<script src="/assets/video-capture.js"></script>
 <script>
 (() => {
+  SeatStudio.mount();
   const height = document.getElementById("height");
   const sizeButtons = [...document.querySelectorAll("[data-size]")];
   const buildButtons = [...document.querySelectorAll("[data-build]")];
   const references = {small: 158, medium: 178, large: 195};
-  const base = {
-    small: {seatHeight: 0, seatDepth: 0, backrest: 100},
-    medium: {seatHeight: 20, seatDepth: 15, backrest: 100},
-    large: {seatHeight: 38, seatDepth: 28, backrest: 102}
-  };
   let selectedSize = "medium";
   let selectedBuild = "average";
 
@@ -396,43 +403,14 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
       sizeButtons.forEach(button => button.classList.toggle("active", button.dataset.size === selectedSize));
     }
 
-    const template = base[selectedSize];
-    const heightDelta = h - references[selectedSize];
-    const seatHeight = clamp(Math.round(template.seatHeight + heightDelta * 0.6), -15, 50);
-    const seatDepth = template.seatDepth;
-    const backrest = template.backrest;
-    const signed = n => n > 0 ? `+${n}` : `${n}`;
-    document.getElementById("backrest").textContent = backrest;
-    document.getElementById("seatHeight").textContent = signed(seatHeight);
-    document.getElementById("seatDepth").textContent = signed(seatDepth);
-    document.getElementById("backrestMovementArrow").setAttribute(
-      "d",
-      backrest < 100
-        ? "M278 241 A28 28 0 0 0 250 269 M256 269 L250 269 L252 262"
-        : "M250 269 A28 28 0 0 1 278 241 M271 242 L278 241 L276 248"
-    );
-    document.getElementById("verticalMovementArrow").setAttribute(
-      "d",
-      seatHeight < 0
-        ? "M290 197 V243 M284 235 L290 243 L296 235"
-        : "M290 243 V197 M284 205 L290 197 L296 205"
-    );
-    document.getElementById("horizontalMovementArrow").setAttribute(
-      "d",
-      seatDepth < 0
-        ? "M184 278 H88 M96 272 L88 278 L96 284"
-        : "M88 278 H184 M176 272 L184 278 L176 284"
-    );
+    SeatStudio.update(h);
   }
 
   height.addEventListener("input", () => selectSize(band(Number(height.value)), false));
   sizeButtons.forEach(button => button.addEventListener("click", () => selectSize(button.dataset.size, true)));
   buildButtons.forEach(button => button.addEventListener("click", () => selectBuild(button.dataset.build)));
   const imageView = {
-    file: document.getElementById("frontalFile"),
-    canvas: document.getElementById("frontalCanvas"),
     image: null,
-    points: [],
     dataUrl: null
   };
   const detectionViewport = document.getElementById("detectionViewport");
@@ -443,9 +421,6 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
   let detectionStatusTimers = [];
   const status = document.getElementById("profileStatus");
   const fmtCm = value => Number.isFinite(value) ? value.toFixed(1) : "n/a";
-  const previewButton = document.getElementById("preview");
-  const seatProposal = document.getElementById("seatProposal");
-  const seatBackrestProposal = document.getElementById("seatBackrestProposal");
   function clearDetectionStatusTimers() {
     detectionStatusTimers.forEach(timer => window.clearTimeout(timer));
     detectionStatusTimers = [];
@@ -453,7 +428,7 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
   function sizeDetectionStage() {
     const aspectRatio = imageView.image.naturalWidth / imageView.image.naturalHeight;
     detectionStage.style.width =
-      `${Math.min(detectionViewport.clientWidth, 240 * aspectRatio)}px`;
+      `${Math.min(detectionViewport.clientWidth, 300 * aspectRatio)}px`;
     detectionStage.style.aspectRatio =
       `${imageView.image.naturalWidth} / ${imageView.image.naturalHeight}`;
   }
@@ -471,9 +446,9 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
         const line = document.getElementById(id);
         ["x1", "y1", "x2", "y2"].forEach(attribute => line.removeAttribute(attribute));
       });
-    detectionStatus.textContent = "Image ready. Press ANALYZE IMAGE to detect the person.";
+    detectionStatus.textContent = "Full-body frame captured. Starting automatic analysis.";
   }
-  function startDetectionAnimation() {
+  function startDetectionAnimation(signal) {
     clearDetectionStatusTimers();
     sizeDetectionStage();
     detectionViewport.classList.remove("detected", "scanning");
@@ -484,7 +459,14 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
       ? 0
       : 5000;
     return new Promise(resolve => {
+      const aborted = () => {
+        clearDetectionStatusTimers();
+        detectionViewport.classList.remove("scanning", "detected");
+        resolve();
+      };
+      signal.addEventListener("abort", aborted, {once: true});
       detectionStatusTimers.push(window.setTimeout(() => {
+        signal.removeEventListener("abort", aborted);
         detectionStatus.textContent = "Scan complete. Finalizing person detection…";
         resolve();
       }, duration));
@@ -542,124 +524,33 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
     void detectionViewport.offsetWidth;
     detectionStatus.textContent = "Person detected. Bounding box shown in orange.";
   }
-  previewButton.addEventListener("click", () => {
-    seatProposal.getAnimations().forEach(animation => animation.cancel());
-    seatBackrestProposal.getAnimations().forEach(animation => animation.cancel());
-    [seatProposal, seatBackrestProposal].forEach(proposal => {
-      proposal.style.opacity = "0";
-      proposal.style.transform = "";
-    });
-
-    const heightOffset = Number(document.getElementById("seatHeight").textContent);
-    const depthOffset = Number(document.getElementById("seatDepth").textContent);
-    const backrestAngle = Number(document.getElementById("backrest").textContent);
-    const imageWidth = document.querySelector(".seat-scheme").getBoundingClientRect().width;
-    const scale = imageWidth / 520;
-    const motionScale = 1.5 * 1.5 * 2;
-    const horizontal = clamp(-depthOffset * 0.3, -18, 18) * motionScale * scale;
-    const vertical = clamp(-heightOffset * 0.35, -18, 18) * motionScale * scale;
-    const recline = clamp(backrestAngle - 100, -8, 10);
-    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1250;
-    seatProposal.animate(
-      [
-        {opacity: 0, transform: "translate(0px, 0px)"},
-        {opacity: 0.88, transform: `translate(${horizontal}px, ${vertical}px)`}
-      ],
-      {duration, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards"}
-    );
-    seatBackrestProposal.animate(
-      [
-        {opacity: 0, transform: "translate(0px, 0px) rotate(0deg)"},
-        {opacity: 0.88, transform: `translate(${horizontal}px, ${vertical}px) rotate(${recline}deg)`}
-      ],
-      {duration, easing: "cubic-bezier(.2,.8,.2,1)", fill: "forwards"}
-    );
-    document.getElementById("seatAnimationStatus").textContent =
-      `Showing orange simulated seat position: fore/aft ${depthOffset >= 0 ? "+" : ""}${depthOffset} mm, height ${heightOffset >= 0 ? "+" : ""}${heightOffset} mm, backrest ${backrestAngle}° (${recline >= 0 ? "+" : ""}${recline}° recline from reference). No real seat movement occurred.`;
-  });
-  {
-    const view = imageView;
-    view.file.addEventListener("change", () => {
-      const file = view.file.files[0];
-      if (!file) return;
-      if (file.size > 8 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-        status.textContent = "Choose a JPEG, PNG, or WebP image smaller than 8 MB.";
-        view.file.value = "";
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const image = new Image();
-        image.onload = () => {
-          view.image = image;
-          view.dataUrl = reader.result;
-          view.points = [];
-          const canvas = view.canvas;
-          const scale = Math.min(1, 1200 / image.naturalWidth, 1200 / image.naturalHeight);
-          canvas.width = Math.round(image.naturalWidth * scale);
-          canvas.height = Math.round(image.naturalHeight * scale);
-          canvas.dataset.scale = String(scale);
-          canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-          detectionImage.src = view.dataUrl;
-          detectionColorImage.src = view.dataUrl;
-          prepareDetectionView();
-          status.textContent = "Frontal image loaded. Click the marker's two endpoints.";
-        };
-        image.onerror = () => { status.textContent = "Could not decode the frontal image."; };
-        image.src = reader.result;
-      };
-      reader.readAsDataURL(file);
-    });
-    view.canvas.addEventListener("click", event => {
-      if (!view.image || view.points.length >= 2) return;
-      const rect = view.canvas.getBoundingClientRect();
-      const x = (event.clientX - rect.left) * view.canvas.width / rect.width;
-      const y = (event.clientY - rect.top) * view.canvas.height / rect.height;
-      const scale = Number(view.canvas.dataset.scale);
-      view.points.push({x: x / scale, y: y / scale});
-      const context = view.canvas.getContext("2d");
-      context.drawImage(view.image, 0, 0, view.canvas.width, view.canvas.height);
-      context.fillStyle = "#b7472a";
-      context.strokeStyle = "#b7472a";
-      context.lineWidth = Math.max(2, view.canvas.width / 300);
-      view.points.forEach(point => {
-        const px = point.x * scale, py = point.y * scale;
-        context.beginPath(); context.arc(px, py, context.lineWidth * 2, 0, 2 * Math.PI); context.fill();
-      });
-      if (view.points.length === 2) {
-        context.beginPath();
-        context.moveTo(view.points[0].x * scale, view.points[0].y * scale);
-        context.lineTo(view.points[1].x * scale, view.points[1].y * scale);
-        context.stroke();
-      }
-    });
-  }
-  document.getElementById("analyzeImages").addEventListener("click", async event => {
-    const button = event.currentTarget;
-    const reference = Number(document.getElementById("referenceLength").value);
-    if (!imageView.dataUrl || imageView.points.length !== 2) {
-      status.textContent = "Upload a frontal image and click both endpoints of the reference marker.";
-      return;
-    }
-    if (!Number.isFinite(reference) || reference < 10 || reference > 250) {
-      status.textContent = "Enter a reference length between 10 and 250 cm.";
-      return;
-    }
-    button.disabled = true;
-    status.textContent = "Running local pose and morphology analysis…";
-    const scanAnimation = startDetectionAnimation();
+  VideoCapture.mount({
+    async captured(dataUrl, timestamp, signal) {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    signal.throwIfAborted();
+    imageView.image = image;
+    imageView.dataUrl = dataUrl;
+    detectionImage.src = dataUrl;
+    detectionColorImage.src = dataUrl;
+    prepareDetectionView();
+    status.textContent = `Full body captured at ${timestamp.toFixed(2)} s. Running automatic demo analysis…`;
+    const scanAnimation = startDetectionAnimation(signal);
     try {
       const response = await fetch("/analyze", {
         method: "POST",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-          reference_length_cm: reference,
-          frontal: {image: imageView.dataUrl, marker_points: imageView.points}
+          mode: "video_demo",
+          frontal: {image: imageView.dataUrl}
         })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Image analysis failed.");
       await scanAnimation;
+      signal.throwIfAborted();
       showDetectionBox(result.detection_bbox);
       const h = result.height_cm;
       height.value = String(clamp(Math.round(h), Number(height.min), Number(height.max)));
@@ -680,15 +571,24 @@ input[type=range] { width: 100%; accent-color: var(--blue); cursor: pointer; }
           ? "Unavailable"
           : `${(result.face_detection_confidence * 100).toFixed(0)}%`;
       document.getElementById("measurementNote").textContent =
-        `Estimated height = calibrated full-body detection box: ${h.toFixed(1)} cm. Torso and leg measurements are unavailable from a frontal-only image. ${result.warnings.join(" ")}`;
-      status.textContent = "Analysis complete. These are approximate image-based estimates, not ergonomic recommendations.";
+        `Uncalibrated demo height: ${h.toFixed(1)} cm, assuming detected face height = 20 cm. ${result.warnings.join(" ")}`;
+      status.textContent = `Automatic analysis complete at ${timestamp.toFixed(2)} s. Demo estimates only, not physical measurements or ergonomic recommendations.`;
     } catch (error) {
       detectionViewport.classList.remove("scanning", "detected");
       clearDetectionStatusTimers();
-      detectionStatus.textContent = error.message || "Person detection failed.";
-      status.textContent = error.message || "Image analysis failed.";
-    } finally {
-      button.disabled = false;
+      detectionStatus.textContent = signal.aborted ? "Video analysis cancelled." : error.message;
+      throw error;
+    }
+    },
+    reset() {
+      clearDetectionStatusTimers();
+      detectionViewport.classList.remove("scanning", "detected");
+      detectionImage.removeAttribute("src");
+      detectionColorImage.removeAttribute("src");
+      detectionStatus.textContent = "Searching video for a full-body frame…";
+      for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "morphologyConfidence", "faceConfidence"]) {
+        document.getElementById(id).textContent = "\u2014";
+      }
     }
   });
   render();
@@ -706,6 +606,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         image_assets = {
+            "/assets/video-capture.js": "video-capture.js",
+            "/assets/seat-studio.js": "seat-studio.js",
+            "/assets/seat-reference-side.png": "seat-reference-side.png",
+            "/assets/seat-reference-definition.png": "seat-reference-definition.png",
+            "/assets/seat-reference-ranges.png": "seat-reference-ranges.png",
+            "/assets/seat-side-motion.svg": "seat-side-motion.svg",
             "/assets/driver-seat-profile.png": "driver-seat-profile.png",
             "/assets/automotive-seat-adjustment-scheme.png": (
                 "automotive-seat-adjustment-scheme.png"
@@ -726,7 +632,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 return
 
             self.send_response(200)
-            self.send_header("Content-Type", "image/png")
+            self.send_header(
+                "Content-Type",
+                "text/javascript; charset=utf-8"
+                if asset_path.suffix == ".js"
+                else "image/svg+xml" if asset_path.suffix == ".svg" else "image/png",
+            )
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -745,7 +656,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        if self.path != "/analyze":
+        if self.path not in ("/analyze", "/probe-frame", "/capture-video", "/stream-video"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -753,21 +664,33 @@ class _HmiHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length."})
             return
-        if content_length <= 0 or content_length > MAX_REQUEST_BYTES:
+        video_upload = self.path in ("/capture-video", "/stream-video")
+        request_limit = 500 * 1024 * 1024 if video_upload else MAX_REQUEST_BYTES
+        if content_length <= 0 or content_length > request_limit:
             self._send_json(
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                {"error": "Request must be smaller than 24 MB."},
+                {"error": "Video must be smaller than 500 MB." if video_upload else "Request must be smaller than 24 MB."},
             )
             return
-        if self.headers.get_content_type() != "application/json":
+        if not video_upload and self.headers.get_content_type() != "application/json":
             self._send_json(
                 HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
                 {"error": "Send the image as application/json."},
             )
             return
+        if self.path == "/stream-video":
+            self._stream_video(content_length)
+            return
         try:
-            payload = json.loads(self.rfile.read(content_length))
-            result = self._analyze_payload(payload)
+            if video_upload:
+                result = self._capture_video(content_length)
+            else:
+                payload = json.loads(self.rfile.read(content_length))
+                result = (
+                    self._probe_frame(payload)
+                    if self.path == "/probe-frame"
+                    else self._analyze_payload(payload)
+                )
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError) as error:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -785,18 +708,153 @@ class _HmiHandler(BaseHTTPRequestHandler):
             return
         self._send_json(HTTPStatus.OK, result)
 
+    def _stream_video(self, content_length: int) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event: dict) -> None:
+            self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+            self.wfile.flush()
+
+        try:
+            result = self._capture_video(content_length, emit)
+            emit({"type": "captured", **result})
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            logger.info("Video preview client disconnected")
+        except ValueError as error:
+            emit({"error": str(error)})
+        except Exception:
+            logger.exception("Local video preview failed")
+            emit({"error": "Local video preview failed. Check server/model logs."})
+
+    def _capture_video(
+        self, content_length: int, preview: Callable[[dict], None] | None = None
+    ) -> dict:
+        with tempfile.TemporaryDirectory(prefix="seat-video-") as directory:
+            path = Path(directory) / "upload.video"
+            remaining = content_length
+            with path.open("wb") as stream:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("Video upload was interrupted.")
+                    stream.write(chunk)
+                    remaining -= len(chunk)
+            capture = cv2.VideoCapture(str(path))
+            try:
+                count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+                fps = capture.get(cv2.CAP_PROP_FPS)
+                if not capture.isOpened() or not np.isfinite(count) or not np.isfinite(fps) or count < 1 or fps <= 0:
+                    raise ValueError("Cannot decode this video. Try an MP4 or WebM file.")
+                samples = min(240, max(1, int(np.ceil(count / fps * 2))), int(count))
+                reason = "No suitable person detected."
+                confirmations = 0
+                for index in range(samples):
+                    frame_number = min(int(count) - 1, int((index + .5) * count / samples))
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                    ok, image = capture.read()
+                    if not ok:
+                        raise ValueError("Could not decode a sampled video frame. Try another video.")
+                    h, w = image.shape[:2]
+                    scale = min(1.0, 1280 / max(h, w))
+                    if scale < 1:
+                        image = cv2.resize(image, (round(w * scale), round(h * scale)))
+                    data_url = None
+                    if preview is not None:
+                        ok, encoded = cv2.imencode(".jpg", image)
+                        if not ok:
+                            raise ValueError("Could not encode the captured video frame.")
+                        data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode()
+                        preview({"type": "frame", "image": data_url, "timestamp": frame_number / fps})
+                    result = self._probe_image(image)
+                    confirmations = confirmations + 1 if result["eligible"] else 0
+                    if result["eligible"] and (preview is None or confirmations >= 2):
+                        if data_url is None:
+                            ok, encoded = cv2.imencode(".jpg", image)
+                            if not ok:
+                                raise ValueError("Could not encode the captured video frame.")
+                            data_url = "data:image/jpeg;base64," + base64.b64encode(encoded).decode()
+                        return {
+                            "image": data_url,
+                            "timestamp": frame_number / fps,
+                        }
+                    reason = result["reason"] or "Full body appeared only once; a second qualifying frame is required."
+                raise ValueError(
+                    f"No suitable full-body frame in {samples} samples. {reason} "
+                    "Use one upright front-facing person with head and feet inside the frame."
+                )
+            finally:
+                capture.release()
+
+    @staticmethod
+    def _full_body_reason(result: FramePoseResult, image: np.ndarray) -> str | None:
+        if result.detected_people != 1 or result.driver is None:
+            return "Exactly one person must be visible."
+        pose = result.driver
+        h, w = image.shape[:2]
+        box = pose.bounding_box
+        if box.height < 120 or box.width <= 0:
+            return "Person is too small for reliable full-body detection."
+        if box.x1 < w * .01 or box.y1 < h * .01 or box.x2 > w * .99 or box.y2 > h * .99:
+            return "Keep the whole head and feet away from the image edges."
+        points = {p.index: p for p in pose.keypoints}
+        required = (0, 5, 6, 11, 12, 13, 14, 15, 16)
+        if any(
+            i not in points
+            or points[i].confidence < max(.5, Settings().keypoint_threshold)
+            or not (w * .01 <= points[i].x <= w * .99 and h * .01 <= points[i].y <= h * .99)
+            for i in required
+        ):
+            return "Head, shoulders, hips, knees and ankles must all be clearly visible."
+        if not (
+            points[0].y < min(points[5].y, points[6].y)
+            and max(points[5].y, points[6].y) < min(points[11].y, points[12].y)
+            and max(points[11].y, points[12].y) < min(points[13].y, points[14].y)
+            and max(points[13].y, points[14].y) < min(points[15].y, points[16].y)
+            and min(points[15].y, points[16].y) - points[0].y > box.height * .65
+        ):
+            return "Person must be upright with extended legs, facing the camera."
+        return None
+
+    def _probe_frame(self, payload: object) -> dict:
+        if not isinstance(payload, dict) or not isinstance(payload.get("frontal"), dict):
+            raise TypeError("Missing frontal video frame.")
+        image = self._decode_image(payload["frontal"].get("image"), "frontal")
+        return self._probe_image(image)
+
+    def _probe_image(self, image: np.ndarray) -> dict:
+        if self.pose_estimator is None:
+            self.__class__.pose_estimator = DriverPoseEstimator(Settings())
+        result = cast(DriverPoseEstimator, self.pose_estimator).estimate(image, 0, 0.0)
+        reason = self._full_body_reason(result, image)
+        pose = result.driver
+        if reason is None and pose is not None:
+            if self.face_detector is None:
+                self.__class__.face_detector = FaceHeightDetector()
+            face = cast(FaceHeightDetector, self.face_detector).detect(image, pose)
+            if face is None or face.height < 12:
+                reason = "A clear front-facing face is needed for the uncalibrated demo scale."
+            elif not 120 <= pose.bounding_box.height * 20 / face.height <= 230:
+                reason = "Face-scale demo estimate is outside 120-230 cm; use a clearer upright frontal view."
+        return {"eligible": reason is None, "reason": reason}
+
     def _analyze_payload(self, payload: object) -> dict:
         if not isinstance(payload, dict):
             raise TypeError("Request body must be a JSON object.")
-        reference_cm = payload.get("reference_length_cm")
+        demo = payload.get("mode") == "video_demo"
+        reference_cm = 20.0 if demo else payload.get("reference_length_cm")
         if not isinstance(reference_cm, (int, float)) or not 10 <= reference_cm <= 250:
             raise ValueError("Reference length must be between 10 and 250 cm.")
 
         view_payload = payload.get("frontal")
         if not isinstance(view_payload, dict):
-            raise TypeError("Missing frontal image and marker calibration.")
+            raise TypeError("Missing frontal image.")
         image = self._decode_image(view_payload.get("image"), "frontal")
-        marker_pixels = self._marker_length(
+        marker_pixels = 1.0 if demo else self._marker_length(
             view_payload.get("marker_points"),
             "frontal",
             image.shape[1],
@@ -813,6 +871,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
         pose_result: FramePoseResult = estimator.estimate(image, 0, 0.0)
         if pose_result.driver is None:
             raise ValueError("No person pose was detected in the frontal image.")
+        if demo and (reason := self._full_body_reason(pose_result, image)):
+            raise ValueError(reason)
         try:
             frontal = analyzer.analyze_view(pose_result, "frontal")
         except ValueError as error:
@@ -823,6 +883,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
             frontal = None
         front_pose: PoseDetection = pose_result.driver
         face_detection = face_detector.detect(image, front_pose)
+        if demo:
+            if face_detection is None or face_detection.height < 12:
+                raise ValueError("A clear face is required for the face-scale demo estimate.")
+            marker_pixels = float(face_detection.height)
 
         frontal_span_cm = (
             frontal.face_to_ankle_span_px * reference_cm / marker_pixels
@@ -857,6 +921,11 @@ class _HmiHandler(BaseHTTPRequestHandler):
         )
         height_cm = box_height_cm
         if not 120 <= height_cm <= 230:
+            if demo:
+                raise ValueError(
+                    "Uncalibrated face-scale demo height is outside 120-230 cm. "
+                    "Try a clearer upright frontal view; no calibrated measurement is available."
+                )
             raise ValueError(
                 "Full-body detection-box height is outside 120–230 cm. Check that "
                 "the frontal image shows the entire person and the marker is "
@@ -881,6 +950,15 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "Torso and leg measurements are unavailable because this workflow uses one frontal image.",
             "Seat offsets remain illustrative only.",
         ]
+        if demo:
+            warnings = [
+                "Uncalibrated demo only: detected face height is assumed to be 20 cm, not measured.",
+                "Height = person-box pixels / face-box pixels * 20 cm. All widths inherit this assumed scale.",
+                "Perspective, face shape, clothing and pose can strongly bias these estimates.",
+                "Build class is a rough bounding-box-width proxy and needs validation.",
+                "Torso and leg measurements are unavailable from this single captured frame.",
+                "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+            ]
         if frontal is None:
             warnings.append(
                 "The person bounding box was detected, but required pose landmarks "
@@ -892,6 +970,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 "but face height and face confidence are unavailable."
             )
         return {
+            "estimation_mode": "uncalibrated_face_scale_demo" if demo else "reference_marker",
             "height_cm": round(height_cm, 1),
             "segment_height_cm": None,
             "size_class": size_class,
