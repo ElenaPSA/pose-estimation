@@ -30,6 +30,8 @@ from .camera_calibration import (
   SIMULATED_CAMERA_HEIGHT_RANGE_M,
   SIMULATED_CAMERA_PITCH_DEG,
   SIMULATED_CAMERA_ROLL_DEG,
+  WEBCAM_ASSUMED_HEIGHT_M,
+  WEBCAM_ASSUMED_HEIGHT_RANGE_M,
   IMPLIED_DIAGONAL_FOV_DEG,
   REPORTED_DIAGONAL_FOV_DEG,
   SIMULATED_HORIZONTAL_FOV_DEG,
@@ -288,15 +290,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
   <main class="layout">
     <div class="card analysis-card">
-      <h2 class="step">LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE</h2>
+      <h2 class="step">LIVE WEBCAM / AUTOMATIC FULL-BODY CAPTURE</h2>
       <div class="upload-grid">
         <div class="upload-view">
-          <label for="videoFile">Driver video</label>
-          <input id="videoFile" type="file" accept="video/*">
-          <div id="videoFileStatus" class="upload-status">No video selected.</div>
-          <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
-          <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;max-height:300px;object-fit:contain">
-          <small>A complete near-camera frame is accepted after two consecutive checks of the same person. If no close, complete frame is found, the best stable full-body frame is scanned at the end.</small>
+          <label>Live camera</label>
+          <div id="cameraStatus" class="upload-status" role="status">Camera is off.</div>
+          <video id="sourceVideo" hidden muted playsinline autoplay style="width:100%;max-height:300px" aria-label="Live webcam preview"></video>
+          <button id="startCamera" class="upload-submit" type="button">Start camera</button>
+          <button id="stopCamera" class="upload-submit" type="button" disabled>Stop camera</button>
+          <button id="retryCamera" class="upload-submit" type="button" disabled>Scan again</button>
         </div>
         <div class="detection-panel">
           <div class="detection-title">Detecting Person</div>
@@ -318,11 +320,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
               <div class="detection-sweep" aria-hidden="true"></div>
             </div>
           </div>
-          <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a high-confidence full-body frame.</div>
+          <div id="detectionStatus" class="detection-status" role="status">Waiting for a live full-body frame.</div>
         </div>
       </div>
-      <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-      <p class="under-cta">Mirror position: X 74 cm, Y -85 cm, Z 87 cm; camera height above ground: 115 cm. Starting camera pose: pitch −10° downward, roll 0°. Portrait video uses the reported 2048 × 1280 camera specs (98.22° horizontal, 50.34° vertical), assuming a 90° anticlockwise rotation and full-frame resize without cropping. Pose and lens distortion are not calibrated. No vehicle commands.</p>
+      <div id="profileStatus" class="upload-status" role="status">Camera is off.</div>
+      <p class="under-cta">Webcam height uses an uncalibrated simulated camera: 70° horizontal field of view, 0.85 m above the floor, level and forward-facing. Actual camera parameters and physical height are not measured. No vehicle commands.</p>
     </div>
     <section class="left">
       <div class="card">
@@ -392,7 +394,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   </footer>
 </div>
 <script src="/assets/seat-studio.js"></script>
-<script src="/assets/video-capture.js"></script>
+<script src="/assets/webcam-capture.js"></script>
 <script>
 (() => {
   SeatStudio.mount();
@@ -550,7 +552,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     void detectionViewport.offsetWidth;
     detectionStatus.textContent = "Person detected. Bounding box shown in orange.";
   }
-  VideoCapture.mount({
+  WebcamCapture.mount({
     async captured(dataUrl, timestamp, signal) {
     const image = new Image();
     image.src = dataUrl;
@@ -561,7 +563,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     detectionImage.src = dataUrl;
     detectionColorImage.src = dataUrl;
     prepareDetectionView();
-    status.textContent = `Analyzing the closest complete frame captured at ${timestamp.toFixed(2)} s…`;
+    status.textContent = `Analyzing the live camera frame captured at ${timestamp.toFixed(2)} s…`;
     const scanAnimation = startDetectionAnimation(signal);
     try {
       const response = await fetch("/analyze", {
@@ -569,7 +571,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-          mode: "video_demo",
+          mode: "webcam_demo",
           frontal: {image: imageView.dataUrl}
         })
       });
@@ -626,7 +628,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     } catch (error) {
       detectionViewport.classList.remove("scanning", "detected");
       clearDetectionStatusTimers();
-      detectionStatus.textContent = signal.aborted ? "Video analysis interrupted." : error.message;
+      detectionStatus.textContent = signal.aborted ? "Camera analysis interrupted." : error.message;
       throw error;
     }
     },
@@ -640,8 +642,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       document.getElementById("heightUnitLabel").textContent =
         "cm · simulated camera model";
       document.getElementById("measurementNote").textContent =
-        "Camera parameters are simulated; physical height cannot be established from the video alone.";
-      detectionStatus.textContent = "Searching video for a high-confidence full-body frame…";
+        "Camera parameters are simulated; physical height cannot be established from the webcam alone.";
+      detectionStatus.textContent = "Searching the live camera for a high-confidence full-body frame…";
       for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "measureUpperLeg", "measureLowerLeg", "morphologyConfidence", "faceConfidence"]) {
         document.getElementById(id).textContent = "\u2014";
       }
@@ -659,7 +661,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
     page: ClassVar[str] = HTML
     script_assets: ClassVar[dict[str, bytes]] = {
         name: (Path(__file__).parent / "assets" / name).read_bytes()
-        for name in ("video-capture.js", "seat-studio.js")
+        for name in ("video-capture.js", "webcam-capture.js", "seat-studio.js")
     }
     pose_estimator: ClassVar[DriverPoseEstimator | None] = None
     face_detector: ClassVar[FaceHeightDetector | None] = None
@@ -667,6 +669,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         image_assets = {
             "/assets/video-capture.js": "video-capture.js",
+            "/assets/webcam-capture.js": "webcam-capture.js",
             "/assets/seat-studio.js": "seat-studio.js",
             "/assets/seat-reference-side.png": "seat-reference-side.png",
             "/assets/seat-reference-definition.png": "seat-reference-definition.png",
@@ -1097,9 +1100,9 @@ class _HmiHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict) or not isinstance(payload.get("frontal"), dict):
             raise TypeError("Missing frontal video frame.")
         image = self._decode_image(payload["frontal"].get("image"), "frontal")
-        return self._probe_image(image)
+        return self._probe_image(image, webcam=payload.get("mode") == "webcam_demo")
 
-    def _probe_image(self, image: np.ndarray) -> dict:
+    def _probe_image(self, image: np.ndarray, webcam: bool = False) -> dict:
         if self.pose_estimator is None:
             self.__class__.pose_estimator = DriverPoseEstimator(Settings())
         result = cast(DriverPoseEstimator, self.pose_estimator).estimate(image, 0, 0.0)
@@ -1148,8 +1151,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
             )
             near_camera = relative_height >= 0.68
             try:
-              simulated_camera = CameraCalibration.simulated_for_image(
-                (frame_width, frame_height)
+              simulated_camera = (
+                CameraCalibration.simulated_webcam_for_image((frame_width, frame_height))
+                if webcam
+                else CameraCalibration.simulated_for_image((frame_width, frame_height))
               )
               self._estimate_calibrated_height(simulated_camera, pose, image)
             except CameraCalibrationError as error:
@@ -1200,7 +1205,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
     def _analyze_payload(self, payload: object) -> dict:
         if not isinstance(payload, dict):
             raise TypeError("Request body must be a JSON object.")
-        demo = payload.get("mode") == "video_demo"
+        webcam_demo = payload.get("mode") == "webcam_demo"
+        demo = webcam_demo or payload.get("mode") == "video_demo"
         calibration_data = payload.get("camera_calibration")
         calibrated_demo = demo and calibration_data is not None
         simulated_demo = demo and calibration_data is None
@@ -1249,6 +1255,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
             camera_model = (
                 CameraCalibration.from_dict(calibration_data)
                 if calibrated_demo
+                else CameraCalibration.simulated_webcam_for_image(
+                  (image.shape[1], image.shape[0])
+                )
+                if webcam_demo
                 else CameraCalibration.simulated_for_image(
                     (image.shape[1], image.shape[0])
                 )
@@ -1340,9 +1350,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
         height_sensitivity_range_cm = None
         sensitivity_heights_cm = None
         if simulated_demo:
-          low_mount_height, high_mount_height = SIMULATED_CAMERA_HEIGHT_RANGE_M
-          low_height_cm = height_cm * low_mount_height / SIMULATED_CAMERA_HEIGHT_M
-          high_height_cm = height_cm * high_mount_height / SIMULATED_CAMERA_HEIGHT_M
+          low_mount_height, high_mount_height = (
+            WEBCAM_ASSUMED_HEIGHT_RANGE_M if webcam_demo else SIMULATED_CAMERA_HEIGHT_RANGE_M
+          )
+          nominal_height = WEBCAM_ASSUMED_HEIGHT_M if webcam_demo else SIMULATED_CAMERA_HEIGHT_M
+          low_height_cm = height_cm * low_mount_height / nominal_height
+          high_height_cm = height_cm * high_mount_height / nominal_height
           height_sensitivity_range_cm = (
             round(min(low_height_cm, high_height_cm), 1),
             round(max(low_height_cm, high_height_cm), 1),
@@ -1410,6 +1423,13 @@ class _HmiHandler(BaseHTTPRequestHandler):
             f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
                 "Morphology centimeters are image-space proportions scaled by the estimated person-box height; they are not independent 3D segment measurements.",
             "Build class is a rough bounding-box-width proxy and needs validation.",
+            "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+          ]
+        elif webcam_demo:
+          warnings = [
+            "SIMULATED WEBCAM ONLY: the webcam is not calibrated; a 70 degree horizontal FOV, zero distortion, and a level forward-facing camera at 0.85 m above flat ground are assumed, not measured.",
+            f"ILLUSTRATIVE ONLY: camera height {low_mount_height:.2f}-{high_mount_height:.2f} m produces {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this is not a measured uncertainty interval.",
+            "The displayed height and morphology are not validated physical measurements. Actual camera height, orientation, distortion, body pose, and ground contact can change the result.",
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]
         elif simulated_demo:

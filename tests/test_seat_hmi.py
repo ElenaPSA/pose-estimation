@@ -43,25 +43,24 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'src="/assets/driver-seat-profile.png"' not in HTML
     assert "Seat-position visualization · visual only" not in HTML
     assert 'class="configuration-layout"' not in HTML
-    assert 'id="videoFile"' in HTML
-    assert 'id="videoFileStatus"' in HTML
+    assert 'id="videoFile"' not in HTML
+    assert 'id="startCamera"' in HTML
+    assert 'id="stopCamera"' in HTML
+    assert 'id="retryCamera"' in HTML
+    assert 'id="cameraStatus"' in HTML
     assert 'id="cameraCalibrationFile"' not in HTML
-    assert 'id="sourceVideo" hidden muted playsinline controls' in HTML
-    assert 'accept="video/*"' in HTML
+    assert 'id="sourceVideo" hidden muted playsinline autoplay' in HTML
     assert 'id="sourceVideo"' in HTML
-    assert 'id="decodedVideoPreview"' in HTML
+    assert 'id="decodedVideoPreview"' not in HTML
     assert 'id="cancelVideo"' not in HTML
     assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
-    assert "2048 × 1280 camera specs" in HTML
-    assert "98.22° horizontal, 50.34° vertical" in HTML
-    assert "Mirror position: X 74 cm, Y -85 cm, Z 87 cm" in HTML
-    assert "camera height above ground: 115 cm" in HTML
-    assert 'src="/assets/video-capture.js"' in HTML
-    assert "VideoCapture.mount({" in HTML
+    assert "uncalibrated simulated camera" in HTML
+    assert 'src="/assets/webcam-capture.js"' in HTML
+    assert "WebcamCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
     assert 'id="referenceLength"' not in HTML
     assert 'id="analyzeImages"' not in HTML
-    assert "LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE</h2>" in HTML
+    assert "LIVE WEBCAM / AUTOMATIC FULL-BODY CAPTURE</h2>" in HTML
     assert 'id="detectionViewport"' in HTML
     assert 'id="detectionStage"' in HTML
     assert 'id="detectionImage"' in HTML
@@ -85,7 +84,7 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert '<rect id="detectedPersonBox" class="person-box"/>' in HTML
     assert "<polygon" not in HTML
     assert ".detection-viewport.detected .detection-overlay { animation: camera-highlight" in HTML
-    assert 'mode: "video_demo"' in HTML
+    assert 'mode: "webcam_demo"' in HTML
     assert "simulated camera model" in HTML
     assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
     assert "MODEL PERFORMANCE" in HTML
@@ -110,7 +109,7 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "cm · simulated" in HTML
     assert 'id="torso"' not in HTML
     assert "proportionWord" not in HTML
-    assert HTML.index("LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("DRIVER DIMENSIONS")
+    assert HTML.index("LIVE WEBCAM / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("DRIVER DIMENSIONS")
     assert HTML.index("SIMULATED CAMERA ESTIMATE · NOT CALIBRATED") < HTML.index('id="seatStudio"')
 
 
@@ -170,6 +169,14 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert "recline: [15, 55]" in studio_source
         assert "cancelAnimationFrame(frame)" in studio_source
         assert "reducedMotion()" in studio_source
+        connection.request("GET", "/assets/webcam-capture.js")
+        webcam_response = connection.getresponse()
+        assert webcam_response.status == 200
+        webcam_source = webcam_response.read().decode()
+        assert "getUserMedia({video: true, audio: false})" in webcam_source
+        assert 'mode: "webcam_demo"' in webcam_source
+        assert "stream?.getTracks().forEach(track => track.stop())" in webcam_source
+        assert "window.addEventListener(\"pagehide\"" in webcam_source
         connection.request("GET", "/assets/video-capture.js")
         video_response = connection.getresponse()
         assert video_response.status == 200
@@ -563,6 +570,38 @@ def test_video_accepts_complete_body_pose() -> None:
     assert _HmiHandler._full_body_reason(
         video_pose(), np.zeros((250, 200, 3))
     ) is None
+
+
+def test_webcam_analysis_uses_uncalibrated_webcam_model(monkeypatch) -> None:
+    class Estimator:
+        def estimate(self, image, *args):
+            return video_pose()
+
+    class FaceDetector:
+        def detect(self, image, pose):
+            return None
+
+    monkeypatch.setattr(_HmiHandler, "pose_estimator", Estimator())
+    monkeypatch.setattr(_HmiHandler, "face_detector", FaceDetector())
+    ok, encoded = cv2.imencode(".png", np.zeros((250, 200, 3), dtype=np.uint8))
+    assert ok
+    payload = {
+        "mode": "webcam_demo",
+        "frontal": {"image": "data:image/png;base64," + base64.b64encode(encoded).decode()},
+    }
+    handler = object.__new__(_HmiHandler)
+
+    probe = handler._probe_frame(payload)
+    result = handler._analyze_payload(payload)
+
+    expected = CameraCalibration.simulated_webcam_for_image((200, 250)).estimate_height_cm(
+        (100, 10), (100, 215), (200, 250)
+    )
+    assert probe["eligible"]
+    assert result["height_cm"] == pytest.approx(expected.height_cm, abs=0.1)
+    assert result["calibration_mode"] == "simulated_vehicle_camera"
+    assert any("webcam is not calibrated" in warning for warning in result["warnings"])
+    assert not any("REPORTED CAMERA POSITION" in warning for warning in result["warnings"])
 
 
 @pytest.mark.parametrize(
