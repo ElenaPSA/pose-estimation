@@ -29,8 +29,6 @@ IMPLIED_DIAGONAL_FOV_DEG = math.degrees(
 MIRROR_CAMERA_POSITION_VEHICLE_M = (-0.85, -0.74, 0.87)
 SIMULATED_CAMERA_HEIGHT_M = 1.15
 SIMULATED_CAMERA_HEIGHT_RANGE_M = (1.05, 1.25)
-WEBCAM_ASSUMED_HEIGHT_M = 0.85
-WEBCAM_ASSUMED_HEIGHT_RANGE_M = (0.75, 0.95)
 SIMULATED_CAMERA_PITCH_DEG = -10.0
 SIMULATED_CAMERA_ROLL_DEG = 0.0
 CAMERA_PITCH_SEARCH_RANGE_DEG = (-15.0, -5.0)
@@ -250,34 +248,6 @@ class CameraCalibration:
                 REPORTED_DIAGONAL_FOV_DEG if rotated_image or matches_camera_aspect else None
             ),
             ground_plane_z_m=MIRROR_CAMERA_POSITION_VEHICLE_M[2] - camera_height_m,
-        )
-
-    @classmethod
-    def simulated_webcam_for_image(
-        cls,
-        image_size_px: tuple[int, int],
-    ) -> CameraCalibration:
-        width, height = image_size_px
-        if width <= 0 or height <= 0:
-            raise CameraCalibrationError("Image dimensions must be positive.")
-        focal_length = width / (2 * math.tan(math.radians(70.0) / 2))
-        return cls(
-            image_width=width,
-            image_height=height,
-            camera_matrix=np.asarray([
-                [focal_length, 0, width / 2],
-                [0, focal_length, height / 2],
-                [0, 0, 1],
-            ], dtype=np.float64),
-            distortion_coefficients=np.zeros(5, dtype=np.float64),
-            reprojection_rms_px=None,
-            camera_position_vehicle_m=(0.0, 0.0, WEBCAM_ASSUMED_HEIGHT_M),
-            camera_to_vehicle_rotation=np.asarray([
-                [1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [0.0, -1.0, 0.0],
-            ], dtype=np.float64),
-            horizontal_fov_deg=70.0,
         )
 
     def to_dict(self) -> dict[str, Any]:

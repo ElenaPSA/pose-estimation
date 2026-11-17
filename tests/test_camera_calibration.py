@@ -142,16 +142,6 @@ def test_incompatible_landscape_aspect_ratio_uses_generic_simulation() -> None:
     assert calibration.camera_matrix[0, 0] == pytest.approx(calibration.camera_matrix[1, 1])
 
 
-def test_webcam_model_does_not_use_mirror_camera_calibration() -> None:
-    calibration = CameraCalibration.simulated_webcam_for_image((640, 480))
-
-    assert calibration.horizontal_fov_deg == 70.0
-    assert calibration.reported_diagonal_fov_deg is None
-    assert calibration.camera_position_vehicle_m == (0.0, 0.0, 0.85)
-    assert calibration.ground_plane_z_m == 0.0
-    assert calibration.camera_to_vehicle_rotation @ np.asarray([0, 0, 1]) == pytest.approx([0, 1, 0])
-
-
 def test_mirror_position_uses_supplied_axes_and_ground_height() -> None:
     calibration = CameraCalibration.simulated_for_image((200, 250))
     assert calibration.camera_position_vehicle_m == (-0.85, -0.74, 0.87)
