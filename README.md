@@ -1,887 +1,254 @@
 # Driver Pose Estimation
 
-Real-Time Driver Pose Estimation using Webcam, OpenCV and MediaPipe.
+A Python project for detecting a driver's body pose, summarizing image-space morphology, and previewing illustrative seat adjustments. The primary browser workflow accepts a **local video file**; it does not use a webcam.
 
----
+> **Height is not calibrated by default.** The HMI uses an explicitly simulated camera model (70-degree horizontal field of view, 0.85 m mount height, level and forward-facing, zero lens distortion). Those values are assumptions, not measurements. The displayed height and sensitivity interval are not physical measurements.
 
-# 1. Project Overview
+## What the Project Does
 
-Driver Pose Estimation is a computer vision application that captures live video from a webcam and estimates the driver's body pose in real time.
+- Runs Ultralytics YOLO pose detection and returns person boxes plus 17 COCO body keypoints.
+- Uploads a local video to the Seat HMI, checks frames for a complete upright person, and analyzes a selected frame.
+- Computes image-space frontal/lateral morphology ratios in a separate pre-entry capture workflow.
+- Offers a chessboard intrinsic-calibration utility and vehicle-pose geometry API. The HMI does not currently have a calibration-file upload control.
+- Shows illustrative seat targets in a browser simulation. It sends no vehicle commands and does not actuate a real seat.
 
-The application uses:
+Face detection through YuNet is available in the analysis code for face/reference workflows. The default simulated-camera HMI height does not use face size as a scale reference.
 
-- OpenCV for video acquisition and visualization
-- MediaPipe Pose for landmark detection
-- NumPy for numerical processing
-- A modular Python architecture
-- Modern Python packaging using `pyproject.toml`
+## Requirements
 
-The project is intentionally simple, maintainable and extensible so that future features can be added easily:
+- Windows, macOS, or Linux.
+- Python 3.10 through 3.14 (`requires-python = ">=3.10,<3.15"`).
+- A browser for the HMI.
+- A webcam is needed only for the separate live-camera commands, not for the HMI video workflow.
 
-- Head pose estimation
-- Driver attention estimation
-- Eye gaze tracking
-- Drowsiness detection
-- Driver monitoring systems
-- RTMaps integration
-- ROS integration
-- MQTT publishing
-- Video recording
+The project dependencies are NumPy, OpenCV, and Ultralytics. The configured pose model defaults to `yolo11n-pose.pt` in the project root; set `POSE_MODEL` if the weights are stored elsewhere.
 
----
+## Install on Windows
 
-# 2. High-Level Architecture
-
-```text
-┌───────────────────┐
-│     Webcam        │
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│  Video Capture    │
-│ video_capture.py  │
-└─────────┬─────────┘
-          │ frame
-          ▼
-┌───────────────────┐
-│   Pose Detector   │
-│ pose_detector.py  │
-│   MediaPipe Pose  │
-└─────────┬─────────┘
-          │ landmarks
-          ▼
-┌───────────────────┐
-│ Pose Visualizer   │
-│pose_visualizer.py │
-└─────────┬─────────┘
-          │
-          ▼
-┌───────────────────┐
-│ OpenCV Display    │
-└───────────────────┘
-```
-
----
-
-# 3. Complete Processing Flow
-
-The application continuously executes the following loop:
-
-```text
-Capture Frame
-      ↓
-Pose Detection
-      ↓
-Landmark Extraction
-      ↓
-Skeleton Drawing
-      ↓
-Display
-      ↓
-Next Frame
-```
-
----
-
-# 4. Project Structure
-
-```text
-driver-pose-estimation/
-│
-├── pyproject.toml
-├── README.md
-│
-├── src/
-│   └── driver_pose_estimation/
-│       │
-│       ├── __init__.py
-│       ├── main.py
-│       ├── config.py
-│       ├── video_capture.py
-│       ├── pose_detector.py
-│       └── pose_visualizer.py
-│
-└── tests/
-```
-
----
-
-# 5. Description of Every File
-
----
-
-## pyproject.toml
-
-Modern Python packaging configuration.
-
-Responsibilities:
-
-- package definition
-- dependencies
-- build configuration
-- installation entry point
-
-Example:
-
-```toml
-[build-system]
-requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "driver-pose-estimation"
-version = "0.1.0"
-
-dependencies = [
-    "opencv-python",
-    "mediapipe",
-    "numpy"
-]
-```
-
----
-
-## __init__.py
-
-Marks the folder as a Python package.
-
-Even if empty, this file is mandatory.
-
-```python
-# empty file
-```
-
----
-
-## config.py
-
-Contains all configurable parameters.
-
-Example:
-
-```python
-from dataclasses import dataclass
-
-@dataclass
-class Settings:
-    CAMERA_ID = 0
-    MIN_DETECTION_CONFIDENCE = 0.5
-    MIN_TRACKING_CONFIDENCE = 0.5
-    WINDOW_NAME = "Driver Pose Estimation"
-```
-
----
-
-## video_capture.py
-
-Handles webcam acquisition.
-
-Responsibilities:
-
-- open camera
-- capture frames
-- release resources
-
-Input:
-
-```text
-Physical webcam
-```
-
-Output:
-
-```text
-OpenCV frame
-```
-
----
-
-## pose_detector.py
-
-Wraps MediaPipe Pose.
-
-Responsibilities:
-
-- initialize MediaPipe
-- process frames
-- estimate body landmarks
-
-Input:
-
-```text
-Frame
-```
-
-Output:
-
-```text
-Pose landmarks
-```
-
-Examples of detected landmarks:
-
-```text
-Nose
-Eyes
-Ears
-Shoulders
-Elbows
-Wrists
-Hips
-Knees
-Ankles
-```
-
----
-
-## pose_visualizer.py
-
-Draws landmarks and skeleton connections.
-
-Responsibilities:
-
-- draw joints
-- draw skeleton
-- visualize results
-
-Input:
-
-```text
-Frame + landmarks
-```
-
-Output:
-
-```text
-Annotated frame
-```
-
----
-
-## main.py
-
-Main application entry point.
-
-Responsibilities:
-
-- initialize components
-- execute processing loop
-- display frames
-- handle application shutdown
-
----
-
-# 6. Installation
-
----
-
-## Step 1 - Clone the Repository
+Open PowerShell in the project directory:
 
 ```powershell
-git clone <repository-url>
-```
-
-Example:
-
-```powershell
-git clone https://github.com/your-company/driver-pose-estimation.git
-```
-
-Enter the project:
-
-```powershell
-cd driver-pose-estimation
-```
-
----
-
-## Step 2 - Open VS Code
-
-```powershell
-code .
-```
-
-Or:
-
-```text
-File
- → Open Folder
- → driver-pose-estimation
-```
-
----
-
-## Step 3 - Open PowerShell Terminal
-
-In VS Code:
-
-```text
-Terminal
-    New Terminal
-```
-
-You should see:
-
-```powershell
-PS C:\Users\U604618\Stellantis\driver-pose-estimation>
-```
-
----
-
-## Step 4 - Verify Python Installation
-
-```powershell
-python --version
-```
-
-or:
-
-```powershell
-py --version
-```
-
-Expected:
-
-```text
-Python 3.10+
-```
-
----
-
-## Step 5 - Create Virtual Environment
-
-```powershell
-py -m venv .venv
-```
-
-This creates:
-
-```text
-.venv/
-```
-
----
-
-## Step 6 - Activate Virtual Environment
-
-PowerShell:
-
-```powershell
+cd C:\Users\U604618\Stellantis\pose-estimation
+py --list
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-Expected:
-
-```text
-(.venv) PS C:\Users\U604618\Stellantis\driver-pose-estimation>
-```
-
----
-
-## Step 7 - Upgrade Pip
-
-```powershell
 python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
----
-
-## Step 8 - Install the Project
-
-Install in editable mode:
+Use an installed Python version from 3.10 to 3.14 in place of `3.13` if necessary. If PowerShell blocks activation, allow it for this terminal only, then activate:
 
 ```powershell
-pip install -e .
-```
-
-This command:
-
-- installs dependencies
-- installs the package locally
-- enables live development
-
----
-
-## Step 9 - Verify Installation
-
-```powershell
-pip list
-```
-
-Expected packages:
-
-```text
-mediapipe
-opencv-python
-numpy
-```
-
----
-
-# 7. Running the Application
-
----
-
-## IMPORTANT
-
-Do NOT execute:
-
-```powershell
-python src/driver_pose_estimation/main.py
-```
-
-because your project uses relative imports:
-
-```python
-from .config import Settings
-```
-
-This will produce:
-
-```text
-ImportError:
-attempted relative import with no known parent package
-```
-
----
-
-## Correct Execution
-
-From the project root:
-
-```powershell
-cd C:\Users\U604618\Stellantis\driver-pose-estimation
-```
-
-Activate the environment:
-
-```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
 ```
 
-Run:
+Activation is optional. Commands can also use the environment's interpreter directly, for example:
 
 ```powershell
-python -m driver_pose_estimation.main
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
----
+Editable installation makes the console commands below available. Run them from the project root so the default relative model path resolves correctly.
 
-# 8. Runtime Architecture
+## Launch the HMI
 
-When the application starts:
-
-```text
-main.py
-   │
-   ▼
-VideoCapture
-   │
-   ▼
-Webcam
-   │
-   ▼
-Frame
-   │
-   ▼
-PoseDetector
-   │
-   ▼
-Body Landmarks
-   │
-   ▼
-PoseVisualizer
-   │
-   ▼
-Annotated Frame
-   │
-   ▼
-OpenCV Window
-```
-
-The sequence is repeated for every frame.
-
----
-
-# 9. Expected Result
-
-After startup:
-
-```text
-+------------------------+
-| Webcam Image           |
-|                        |
-|       Skeleton         |
-|                        |
-+------------------------+
-```
-
-You should see:
-
-- live webcam stream
-- body landmarks
-- skeleton connections
-- smooth real-time tracking
-
----
-
-# 10. Stopping the Application
-
-Close the window or press:
-
-```text
-q
-```
-
-The application will:
-
-```text
-Release webcam
-Destroy OpenCV windows
-Exit cleanly
-```
-
----
-
-# 11. Troubleshooting
-
----
-
-## Error
-
-```text
-attempted relative import with no known parent package
-```
-
-### Cause
-
-Wrong command:
-
-```powershell
-python src/driver_pose_estimation/main.py
-```
-
-### Solution
-
-```powershell
-pip install -e .
-python -m driver_pose_estimation.main
-```
-
----
-
-## Error
-
-```text
-ModuleNotFoundError: mediapipe
-```
-
-### Solution
-
-```powershell
-pip install mediapipe
-```
-
----
-
-## Error
-
-```text
-ModuleNotFoundError: cv2
-```
-
-### Solution
-
-```powershell
-pip install opencv-python
-```
-
----
-
-## Error
-
-```text
-Cannot open camera
-```
-
-### Check webcam
-
-```powershell
-python -c "import cv2; print(cv2.VideoCapture(0).isOpened())"
-```
-
-Expected:
-
-```text
-True
-```
-
----
-
-# 12. Future Extensions
-
-## Pre-entry morphology profile (prototype)
-
-Before the driver enters the vehicle, run the separate two-view capture command:
-
-```powershell
-driver-pose-capture
-```
-
-Stand upright with the full body visible in the camera. Press `F` for the
-frontal view, turn sideways, then press `L` for the lateral view. Press `Q` to
-exit. The frontal capture requires both sides of the shoulders, hips, knees,
-and ankles; the lateral capture requires a visible face landmark and a
-shoulder-to-ankle body chain on at least one side. If landmarks are missing,
-the capture is rejected so the driver can reposition and try again.
-
-The command saves normalized, two-dimensional image-space measurements to
-`outputs/morphology_profile.json`. It does not save the captured images. The
-profile includes shoulder and hip widths and torso and leg segment lengths
-relative to the face-to-ankle image span, where visible.
-
-It also saves a side-by-side frontal/lateral visualization with the detected
-pose skeleton overlaid in green to `outputs/morphology_visualization.png`.
-This visualization contains the two captured camera frames; treat it as
-personal image data. The frames are held in memory during the capture session
-and are written only as part of this annotated comparison.
-
-This is not a physical height estimate: the pose model has no top-of-head
-landmark, and image pixels have no physical scale without camera/scene
-calibration. Perspective and body orientation also affect 2D measurements.
-The profile therefore does not generate a seat-position recommendation.
-Vehicle geometry and seat calibration are needed before a recommendation can
-be derived; this prototype does not actuate a real seat.
-
-After adding the current virtual environment's scripts directory to `PATH`, or
-while the environment is activated, the command can be run from the project
-root. Alternatively:
-
-```powershell
-python -m driver_pose_estimation.morphology_capture
-```
-
-## Seat settings HMI prototype
-
-Launch the local browser HMI with:
+The main workflow is to upload a video file in the browser:
 
 ```powershell
 driver-seat-hmi
 ```
 
-Or run it as a module with `python -m driver_pose_estimation.seat_hmi`.
-It opens on `http://127.0.0.1:8765`; use `--port` to select another port.
-Select a browser-playable video (MP4/H.264 or WebM, under 500 MB).
-The browser plays it visibly on the left, while frames from the live playback
-are checked sequentially (at least 0.5 seconds between checks, capped at 240).
-Inference latency can reduce the sampling rate; brief full-body appearances
-between checks can be missed. The local
-`/probe-frame` endpoint checks each frame sequentially using YOLO pose detection.
-Selection requires exactly one person, an uncropped box with a 1% edge margin,
-confident nose, shoulder, hip, knee and ankle landmarks, an upright pose, and a
-clear YuNet face. These are visibility heuristics, not proof of full-body quality.
-Two consecutive eligible frames are required, not just a single detection.
-Playback then pauses and seeks back to the exact second captured frame before
-the five-second grayscale scan and `/analyze` request start on the right.
-The source remains visible and frozen on the left throughout analysis.
-These checks do not prove identity continuity or measurement accuracy.
-If browser decoding fails, `/stream-video` automatically uses the local OpenCV
-decoder, streaming a visible sampled JPEG preview to the left panel, with the
-same two-frame pose/face confirmation. It samples about twice per second across
-the duration, capped at 240 evenly spaced samples; the browser displays these
-in sequence, at most two per second, not full-frame-rate playback. This
-fallback temporarily stores the uploaded video in an isolated system temporary
-directory, deleted when capture succeeds or fails. The final preview frame
-stays frozen on the left while the detection panel scans on the right.
-Cancel aborts the browser request but an ongoing
-server-side search can finish before its temporary file is removed.
-No reference-length entry,
-marker clicks or Analyze Image button are required. Cancel stops the browser
-workflow; a model inference already running on the server may finish.
-Invalid/unsupported videos, missing full-body frames and inference errors are
-shown explicitly. Choose the video again to retry.
+Equivalent module command:
 
-When analysis and the scan finish, the actual detected box is outlined in orange
-and connected at its four corners to an illustrated camera. Original color is
-restored only within the box; the rest remains grayscale. Reduced-motion mode
-skips the animation delay. Normally only downscaled JPEG frames (longest side
-1280 px) are sent to the local server. The fallback uploads the video locally;
-neither mode saves permanent media or sends it externally.
+```powershell
+python -m driver_pose_estimation.seat_hmi
+```
 
-**Simulated camera estimate, not physical measurement:** the HMI no longer
-uses the assumed 20 cm face-box scale or asks the user to load a calibration
-file. Its built-in camera model assumes a 70 degree horizontal field of view,
-an 0.85 m mount height, and a level, forward-facing camera. The mount-height
-sensitivity interval varies that assumption from 0.75 to 0.95 m; it does not
-cover camera pitch/roll, lens distortion, vehicle pitch, body lean, or landmark
-error. These defaults are a simulation, not a calibration inferred from the
-video. The HMI reports the range and labels its point estimate as simulated.
-Shoulder/hip widths and torso/leg lengths are unavailable in this single-view
-geometry. Build class remains a rough person-box-width heuristic.
-YuNet model weights and
-license are in
-`src/driver_pose_estimation/assets/`; the model comes from
-[OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
+Choose a browser-playable video in the **Driver video** file input. The limit is 500 MB. The HMI listens on `http://127.0.0.1:8765/` and attempts to open the browser automatically. Choose a different port with either command:
 
-## Calibrated camera height workflow (experimental)
+```powershell
+driver-seat-hmi --port 8766
+python -m driver_pose_estimation.seat_hmi --port 8766
+```
 
-Chessboard calibration estimates the camera matrix and lens distortion. Capture
-at least eight sharp views of a rigid, measured chessboard at varied positions
-and tilts, using the same focus, zoom, resolution and image crop as the video.
-`board-columns` and `board-rows` are the number of inner corners, not the number
-of squares. `square-size-mm` must be measured, not guessed.
+The browser plays the uploaded video while checking frames. If the browser cannot decode its codec, the local OpenCV fallback decodes and displays sampled frames. Frame checks are sequential, capped at 240 samples; inference time can cause brief appearances between checks to be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
+
+The fallback temporarily stores the uploaded video in a system temporary directory and removes it when processing finishes. The HMI does not save permanent copies or send video externally. A browser decoding error can produce an aborted blob request in the developer console; the local fallback handles that case.
+
+## Height Estimate and Camera Assumptions
+
+With no measured intrinsics or mount pose, the HMI creates a simulated camera model:
+
+| Parameter | Default assumption |
+|---|---:|
+| Horizontal field of view | 70 degrees |
+| Camera height above flat ground | 0.85 m |
+| Mount orientation | Level, facing forward |
+| Lens distortion | Zero |
+| Ground plane | Vehicle `z = 0` |
+| Sensitivity interval | 0.75-0.95 m camera height |
+
+For height, the code uses the person-box top center as the head image point and the box bottom plus ankle-centered horizontal position as the ground-contact image point. It undistorts those pixels, constructs rays, intersects the foot ray with the ground plane, and projects the head ray onto the same vertical line. The reported sensitivity interval recomputes height at the two mount-height endpoints; it does not cover uncertainty in FOV, pitch, roll, lens distortion, vehicle pitch, body lean, or landmark placement.
+
+This is a geometry simulation, **not camera calibration**. A plausible-looking number does not make the assumed camera parameters true. For example, on the checked `rotated_2.mp4` clip the simulated path selected approximately 9.08 seconds and returned about 176.5 cm, with a mount-height sensitivity interval of about 155.7-197.3 cm. Treat this as a demonstration only.
+
+The HMI does not estimate shoulder width, hip width, torso length, or leg length in this single-view camera-geometry mode. Face height is not used as a scale. Seat targets derived from the displayed height are also illustrative only.
+
+## Optional Camera Calibration Tools
+
+The calibration utility estimates **intrinsics** from chessboard images. It does not infer a vehicle camera mount pose from the chessboard. You must separately measure the camera position and orientation relative to the vehicle/floor frame if using calibrated geometry.
+
+Example with a 9-by-6 inner-corner board and measured 25 mm squares:
+
+```powershell
+driver-camera-calibrate --images "calibration/*.jpg" --board-columns 9 --board-rows 6 --square-size-mm 25 --output camera_calibration.json
+```
+
+Use at least eight sharp views at varied image positions and board orientations. Images must share resolution and use the same camera focus, zoom, crop, and resolution as the video. `board-columns` and `board-rows` count **inner corners**, not squares. `square-size-mm` must be physically measured.
+
+To include measured vehicle pose, provide `--camera-pose-json`:
 
 ```powershell
 driver-camera-calibrate --images "calibration/*.jpg" --board-columns 9 --board-rows 6 --square-size-mm 25 --camera-pose-json camera_pose.json --output camera_calibration.json
 ```
 
-The pose JSON supplies the vehicle-mounted camera position and orientation:
+The pose file contains numeric values in this shape:
 
 ```json
 {
-   "position_m": [0.0, 0.0, 1.2],
-   "rotation_matrix": [
-      [1.0, 0.0, 0.0],
-      [0.0, 0.0, 1.0],
-      [0.0, -1.0, 0.0]
-   ]
+  "position_m": [0.0, 0.0, 0.85],
+  "rotation_matrix": [
+    [1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, -1.0, 0.0]
+  ]
 }
 ```
 
-Those numbers are illustrative only. Replace them with measured mount position
-and orientation. Vehicle axes are `x right, y forward, z up`; the rotation matrix
-maps OpenCV camera axes (`x right, y down, z forward`) into vehicle axes. The
-vehicle floor is `z=0`. The camera position must be measured relative to that
-same ground datum; orientation is required as well as position. The chessboard
-does not determine the vehicle mount pose by itself.
+**The values above are placeholders, not a calibration for this vehicle.** `position_m` is `[right, forward, up]` in the vehicle frame. The rotation maps OpenCV camera axes (`x right, y down, z forward`) into vehicle axes (`x right, y forward, z up`). The vehicle floor is `z=0`. The JSON includes chessboard reprojection RMS; a low RMS alone does not validate the measured camera pose or height estimate.
 
-The calibration command writes a reusable JSON artifact, but the current HMI
-does not load calibration files. Its default remains the simulated camera
-profile described above. A deployment that supplies the JSON through the
-analysis API can use calibrated head/foot rays, the vehicle ground plane, and
-the upright-body assumption. Height still depends on accurate mount pose,
-ground contact, and head/foot localization. This single-camera geometry does
-not calibrate shoulder/hip widths or remove errors from body lean, uneven
-ground, suspension pitch, or inaccurate mount measurements. Check chessboard
-reprojection RMS and validate against known-height targets; a low RMS alone
-does not validate vehicle pose or metric height.
+The current HMI always uses its built-in simulated profile and has no calibration-file input. The `/analyze` API accepts a `camera_calibration` object for integrations that supply measured calibration. Do not copy the example pose values into a real measurement workflow.
 
-Perspective, clothing and landmark quality also affect the estimates.
-The older normalized morphology JSON capture remains available via
-`driver-pose-capture`.
+## Other Commands
 
-The seat parameters are illustrative demo values for the HMI only. The
-full-width Kinematic Studio uses one detailed right-facing SVG seat model for
-the three static movement cards and the combined animation. The supplied raster
-sheet/crops are no longer displayed: their left-facing seat and old origin labels
-conflict with the confirmed convention. No front or top views are shown.
-The model, constants, UI and animation share `assets/seat-studio.js`.
+### `driver-pose`: live webcam pose/comfort demo
 
-- Fixed origin O is the location of the marked cushion-bottom point with the
-  seat **fully rearward and lowest**. This is not a measured automotive SRP.
-- X positive is forward: **0 mm fully rearward, 255 mm fully forward**.
-- Z positive is upward; travel above the lowest setting is **0-80 mm**.
-  Floor-to-marker height is **70 + Z mm**, within **70-150 mm**.
-- Backrest recline is **15-55 degrees from vertical**, increasing rearward.
-- Y positive is vehicle-left; there is no simulated lateral movement.
-
-The wheel is always on the right, seat cushion points right and backrest reclines
-left. A reference panel before the movement cards specifies the agreed
-**nominal comfort reference: X = 127.5 mm, Z = 40 mm (110 mm from floor),
-recline = 25 degrees**. This is a demonstration baseline, not a universal or
-validated comfortable position or the car's unknown current position.
-A dedicated right-facing gray-seat schematic above the three movement cards
-illustrates the fore/aft travel ruler, vertical travel ruler and recline sector
-from vertical. Reference markers locate X 127.5 mm, Z 40 mm and recline 25 degrees
-inside their respective limits. Floor heights and absolute reference values are
-also labelled. On narrow screens the detailed schematic scrolls horizontally
-within its panel to preserve label readability. The three movement cards and
-combined animation are unchanged.
-Static cards show one axis changing, keeping the other axes at this reference.
-All four figures show a filled gray reference seat behind a filled orange
-simulated seat. The slightly translucent orange seat allows overlap comparison;
-at zero movement the two poses coincide. Legends identify both colors.
-Dashed lines, separate orange accent lines and movement arrows are omitted.
-The main card values and live
-animation readouts are signed movements: `target - nominal comfort reference`.
-Secondary card captions retain absolute reference and target coordinates and
-physical travel ranges. Positive X is forward, positive Z upward, and positive
-recline more rearward; zero means no movement.
-
-The hero plays a cancellable 4.2-second sequence: fore/aft, elevation, then
-recline, with live numeric readouts, stage highlighting and a progress bar.
-Replay resets to the nominal comfort reference (zero signed movements), with
-its gray seat fixed throughout. Profile changes cancel any in-progress animation
-and show the new target immediately; stale animation callbacks cannot overwrite it.
-Reduced-motion preference shows the final pose immediately. Drawing displacement
-is 0.75 SVG units per mm on both axes with a shared hinge for the whole backrest
-and headrest. Rail/cushion shapes and hinge are illustrative, not vehicle CAD.
-There are no vehicle commands.
-
-Automatic height-band demo rules remain, not a calibrated morphology-to-comfort
-model: the former distances 0/15/28 mm rearward from the forward stop are rebased
-as `X = 255 - distance`, giving absolute **255/240/227 mm**.
-This changes coordinates, not physical target positions;
-vertical `round(base + 0.6 * (height - reference height))` is limited to 0-80 mm;
-backrest demo targets are 25/25/27 degrees from vertical. The reference heights
-are 158/178/195 cm and vertical bases 0/20/38 mm. Build category does not change
-these targets. Physical travel bounds are enforced, but do not validate comfort
-or mechanical reachability of combinations. The diagram does not create an
-ergonomic recommendation. Use stationary secured-vehicle evaluation and the
-manufacturer's seating/restraint guidance, not these demo targets as instructions.
-The profile height bands, parameter offsets, and recommendation rules require
-validation and vehicle-specific calibration before they could be considered
-for real use.
-
----
-
-The architecture can easily be extended to:
-
-```text
-Driver Pose Estimation
-        │
-        ├── Head Pose Estimation
-        ├── Eye Gaze Tracking
-        ├── Driver Monitoring
-        ├── Drowsiness Detection
-        ├── Multi-Camera Support
-        ├── Video Recording
-        ├── MQTT Publishing
-        ├── RTMaps Integration
-        └── ROS Integration
+```powershell
+driver-pose
 ```
 
----
-
-# 13. Summary
-
-The complete data flow is:
-
-```text
-Webcam
-   ↓
-Video Capture
-   ↓
-MediaPipe Pose
-   ↓
-Landmark Detection
-   ↓
-Skeleton Visualization
-   ↓
-OpenCV Display
-```
-
-The project is organized as a clean Python package and should always be launched with:
+Equivalent:
 
 ```powershell
 python -m driver_pose_estimation.main
 ```
 
-after:
+This is the separate **webcam** workflow. It runs pose/posture analysis and a simulated comfort agent; it is not the uploaded-video HMI. The simulated vehicle and seat do not move a real vehicle. Common keyboard actions are `C` (comfort check), `1`/`2` (comfortable/uncomfortable), `F` (too far), `R` (too close), `B` (lower-back discomfort), `H`/`L` (too high/low), `Y` (apply simulated adjustment), `N` (cancel), `M` (simulate moving), `P` (simulate parked), and `Q`/`Esc` (quit).
+
+### `driver-pose-capture`: two-view morphology capture
 
 ```powershell
-pip install -e .
+driver-pose-capture
 ```
 
-from the project root directory.
+Equivalent:
+
+```powershell
+python -m driver_pose_estimation.morphology_capture
+```
+
+This separate webcam workflow asks for an upright frontal view (`F`) and then a lateral view (`L`); press `Q` to finish. It saves `outputs/morphology_profile.json` and `outputs/morphology_visualization.png`. These are normalized image-space proportions, not physical measurements, and do not produce a seat recommendation.
+
+### `person_height_video`: annotated video height experiment
+
+This module accepts a webcam index by default or a video file with `--source`:
+
+```powershell
+python -m driver_pose_estimation.person_height_video --source .\rotated_2.mp4 --output .\outputs\person_height_output.mp4 --capture-output .\outputs\person_height_capture.jpg
+```
+
+Useful arguments:
+
+| Argument | Meaning |
+|---|---|
+| `--source` | Camera index such as `0` (default), or a video path |
+| `--output` | Annotated video output; default `person_height_output.mp4` |
+| `--capture-output` | Best tracked-person still; default `person_height_capture.jpg` |
+| `--reference-height-cm` | Known height of a vertical reference object |
+| `--reference-height-px` | Its image-space height in the same view |
+| `--no-display` | Write output without opening the preview window |
+
+For centimeter output, supply both reference arguments, and place the measured vertical reference at approximately the same camera depth as the person. Without it, the video annotation reports image-space pixels, not physical centimeters. The script tracks one person, tolerates up to five missed frames, and saves the clearest/largest fully visible observation. A single pixel-to-centimeter scale is invalid across substantially different camera depths.
+
+### `driver-camera-calibrate`: chessboard intrinsic calibration
+
+```powershell
+driver-camera-calibrate --help
+```
+
+Equivalent:
+
+```powershell
+python -m driver_pose_estimation.camera_calibration --help
+```
+
+This writes a calibration JSON; it does not change the HMI's simulated defaults. The pose input is user-measured, not estimated by the chessboard routine.
+
+## Configuration
+
+`driver-pose` and the webcam morphology capture use environment variables. Defaults are shown below; set them in the PowerShell session before running a command.
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `CAMERA_INDEX` | `0` | Webcam index for live-camera commands |
+| `CAMERA_WIDTH` / `CAMERA_HEIGHT` | `640` / `480` | Requested webcam frame size |
+| `CAMERA_FPS` | `15` | Requested webcam frame rate |
+| `POSE_MODEL` | `yolo11n-pose.pt` | YOLO pose weights |
+| `POSE_DEVICE` | `cpu` | Inference device |
+| `POSE_CONFIDENCE` | `0.25` | Person detection threshold |
+| `POSE_IOU` | `0.45` | Detection NMS IoU threshold |
+| `KEYPOINT_CONFIDENCE` | `0.50` | Pose landmark threshold |
+| `POSE_IMAGE_SIZE` | `640` | YOLO inference image size |
+| `PROCESS_EVERY_N_FRAMES` | `1` | Live camera frame sampling interval |
+| `MIRROR_CAMERA` | `true` | Mirror live webcam display |
+| `DISPLAY_VIDEO` | `true` | Show the live webcam window |
+| `OUTPUT_DIR` | `outputs` | JSON/profile output directory |
+| `SAVE_HISTORY` | `true` | Save live pose history |
+| `LOG_EVERY_N_FRAMES` | `10` | Live processing log interval |
+
+Example:
+
+```powershell
+$env:CAMERA_INDEX = "1"
+$env:POSE_DEVICE = "cpu"
+driver-pose
+```
+
+These webcam settings do not select the HMI video. The HMI receives its input from the browser's video-file picker.
+
+## Outputs
+
+- `driver-pose`: `outputs/pose_history.json` and `outputs/pose_summary.json` when history saving is enabled.
+- `driver-pose-capture`: `outputs/morphology_profile.json` and `outputs/morphology_visualization.png`.
+- `person_height_video`: annotated video and selected still, at the paths given by `--output` and `--capture-output`.
+- `driver-camera-calibrate`: `camera_calibration.json` by default, or the path passed to `--output`.
+- HMI: no permanent media output; fallback decoding uses a temporary local video file that is removed after processing.
+
+## Tests and Lint
+
+Install development dependencies with `python -m pip install -e ".[dev]"`, then run:
+
+```powershell
+python -m pytest
+ruff check src tests
+```
+
+## Troubleshooting
+
+- **`driver-seat-hmi` is not recognized:** activate `.venv` and install the project with `python -m pip install -e .`, or run `python -m driver_pose_estimation.seat_hmi`.
+- **Port 8765 is already in use:** start with `driver-seat-hmi --port 8766` and open the printed URL.
+- **HMI cannot decode the video in-browser:** the application attempts its local OpenCV fallback. Use a valid video file below 500 MB.
+- **`driver-pose` cannot open a camera:** check `CAMERA_INDEX` and confirm Windows camera access is allowed. This does not affect HMI video-file uploads.
+- **Model weights cannot be found:** run from the project root or set `POSE_MODEL` to the weights path.
+- **A calibrated height is needed:** collect same-camera chessboard views and measure the camera mount pose relative to the vehicle floor. The simulated HMI result is not a substitute.
