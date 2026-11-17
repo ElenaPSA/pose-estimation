@@ -5,6 +5,7 @@ import base64
 import binascii
 import json
 import logging
+import socket
 import subprocess
 import tempfile
 import webbrowser
@@ -20,11 +21,15 @@ import numpy as np
 
 from .camera_calibration import (
   CAMERA_IMAGE_SIZE_PX,
+  CAMERA_PITCH_SEARCH_RANGE_DEG,
+  CAMERA_ROLL_SEARCH_RANGE_DEG,
   CameraCalibration,
   CameraCalibrationError,
   HeightEstimate,
   SIMULATED_CAMERA_HEIGHT_M,
   SIMULATED_CAMERA_HEIGHT_RANGE_M,
+  SIMULATED_CAMERA_PITCH_DEG,
+  SIMULATED_CAMERA_ROLL_DEG,
   IMPLIED_DIAGONAL_FOV_DEG,
   REPORTED_DIAGONAL_FOV_DEG,
   SIMULATED_HORIZONTAL_FOV_DEG,
@@ -42,6 +47,7 @@ MAX_REQUEST_BYTES = 24 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 6000
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+FULL_BODY_CONFIDENCE_THRESHOLD = 0.70
 
 HTML = r"""<!doctype html>
 <html lang="en">
@@ -316,7 +322,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         </div>
       </div>
       <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-      <p class="under-cta">Matching video uses the reported 2048 × 1280 camera specs (98.22° horizontal, 50.34° vertical); other aspect ratios use a generic simulation. Mirror position, orientation and lens distortion are not calibrated; the 0.85m level, forward-facing pose is only a placeholder. No vehicle commands.</p>
+      <p class="under-cta">Mirror position: X 74 cm, Y -85 cm, Z 87 cm; camera height above ground: 115 cm. Starting camera pose: pitch −10° downward, roll 0°. Portrait video uses the reported 2048 × 1280 camera specs (98.22° horizontal, 50.34° vertical), assuming a 90° anticlockwise rotation and full-frame resize without cropping. Pose and lens distortion are not calibrated. No vehicle commands.</p>
     </div>
     <section class="left">
       <div class="card">
@@ -375,6 +381,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         <div class="under-cta">Model confidence scores indicate detection certainty; they are not measurement-accuracy guarantees.</div>
       </div>
     </section>
+    <p id="seatStudioUnavailable" class="analysis-card" role="status" hidden>Seat preview unavailable: the supported height range is 120–230 cm.</p>
     <section id="seatStudio" class="card analysis-card" aria-label="Seat configuration vector simulation">
       <noscript>Enable JavaScript to display the seat simulation.</noscript>
     </section>
@@ -419,7 +426,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       sizeButtons.forEach(button => button.classList.toggle("active", button.dataset.size === selectedSize));
     }
 
-    SeatStudio.update(h);
+    const previewAvailable = h >= 120 && h <= 230;
+    document.getElementById("seatStudio").hidden = !previewAvailable;
+    document.getElementById("seatStudioUnavailable").hidden = previewAvailable;
+    if (previewAvailable) SeatStudio.update(h);
   }
 
   height.addEventListener("input", () => selectSize(band(Number(height.value)), false));
@@ -647,6 +657,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
 class _HmiHandler(BaseHTTPRequestHandler):
     page: ClassVar[str] = HTML
+    script_assets: ClassVar[dict[str, bytes]] = {
+        name: (Path(__file__).parent / "assets" / name).read_bytes()
+        for name in ("video-capture.js", "seat-studio.js")
+    }
     pose_estimator: ClassVar[DriverPoseEstimator | None] = None
     face_detector: ClassVar[FaceHeightDetector | None] = None
 
@@ -669,7 +683,9 @@ class _HmiHandler(BaseHTTPRequestHandler):
         if self.path in image_assets:
             asset_path = Path(__file__).parent / "assets" / image_assets[self.path]
             try:
-                body = asset_path.read_bytes()
+                body = self.script_assets.get(asset_path.name)
+                if body is None:
+                    body = asset_path.read_bytes()
             except OSError:
                 logger.exception(
                     "Could not read HMI illustration asset: %s", asset_path
@@ -949,7 +965,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 fps = capture.get(cv2.CAP_PROP_FPS)
                 if not capture.isOpened() or not np.isfinite(count) or not np.isfinite(fps) or count < 1 or fps <= 0:
                     raise ValueError("Cannot decode this video. Try an MP4 or WebM file.")
-                samples = min(240, max(1, int(np.ceil(count / fps * 2))), int(count))
+                samples = min(240, max(1, int(np.ceil(count / fps * 4))), int(count))
                 reason = "No suitable person detected."
                 confirmations = 0
                 tracked_box = None
@@ -1031,7 +1047,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 if best_observation is None:
                   raise ValueError(
                     f"No high-confidence complete-body frame in {samples} samples. "
-                    f"Required confidence is 82%. {reason} "
+                    f"Required confidence is {FULL_BODY_CONFIDENCE_THRESHOLD:.0%}. {reason} "
                     "Move closer while keeping the head and both feet inside the frame."
                   )
                 return best_observation
@@ -1144,7 +1160,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "confidence_score": confidence_score,
             "confident": (
                 reason is None
-                and confidence_score >= 0.70
+                and confidence_score >= FULL_BODY_CONFIDENCE_THRESHOLD
             ),
             "quality_score": quality_score,
             "relative_height": relative_height,
@@ -1325,28 +1341,15 @@ class _HmiHandler(BaseHTTPRequestHandler):
         sensitivity_heights_cm = None
         if simulated_demo:
           low_mount_height, high_mount_height = SIMULATED_CAMERA_HEIGHT_RANGE_M
-          image_size = (image_width, image_height)
-          low_estimate = self._estimate_calibrated_height(
-            CameraCalibration.simulated_for_image(
-              image_size, camera_height_m=low_mount_height
-            ),
-            front_pose,
-            image,
-          )
-          high_estimate = self._estimate_calibrated_height(
-            CameraCalibration.simulated_for_image(
-              image_size, camera_height_m=high_mount_height
-            ),
-            front_pose,
-            image,
-          )
+          low_height_cm = height_cm * low_mount_height / SIMULATED_CAMERA_HEIGHT_M
+          high_height_cm = height_cm * high_mount_height / SIMULATED_CAMERA_HEIGHT_M
           height_sensitivity_range_cm = (
-            round(min(low_estimate.height_cm, high_estimate.height_cm), 1),
-            round(max(low_estimate.height_cm, high_estimate.height_cm), 1),
+            round(min(low_height_cm, high_height_cm), 1),
+            round(max(low_height_cm, high_height_cm), 1),
           )
           sensitivity_heights_cm = (
-            low_estimate.height_cm,
-            high_estimate.height_cm,
+            low_height_cm,
+            high_height_cm,
           )
 
         morphology_dimensions_cm = None
@@ -1401,7 +1404,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
           )
           warnings = [
             "Height uses chessboard-calibrated intrinsics and the supplied camera-to-vehicle pose.",
-            "Assumes a level ground plane at vehicle z=0 and an upright vertical body.",
+            f"Assumes a level ground plane at vehicle z={calibration.ground_plane_z_m:.2f} m and an upright vertical body.",
             "Head and ground-contact use the person-box top/bottom with ankle-centered ground position; box localization and mount-pose uncertainty are not included.",
             f"Vertical-line consistency residual: {camera_height_estimate.vertical_alignment_residual_m:.3f} m.",
             f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
@@ -1415,14 +1418,19 @@ class _HmiHandler(BaseHTTPRequestHandler):
             f"SPEC-BASED INTRINSICS, NOT CALIBRATED: {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} pixels, {SIMULATED_HORIZONTAL_FOV_DEG:.2f} degree horizontal and {SIMULATED_VERTICAL_FOV_DEG:.2f} degree vertical FOV; lens distortion is assumed zero.",
             f"FOV SPECIFICATION MISMATCH: reported diagonal is {REPORTED_DIAGONAL_FOV_DEG:.2f} degrees, but horizontal and vertical FOV imply {IMPLIED_DIAGONAL_FOV_DEG:.2f} degrees for a rectilinear camera.",
             ]
+            if image_height > image_width:
+              intrinsics_warnings.append(
+                f"IMAGE GEOMETRY ASSUMPTION: {image_width}x{image_height} portrait frame is a 90 degree anticlockwise rotation of the full sensor image followed by resizing, possibly with unequal horizontal and vertical scales. Cropping or other processing would invalidate this mapping."
+              )
           else:
             intrinsics_warnings = [
               f"SIMULATION ONLY: frame aspect ratio {image_width}x{image_height} does not match the specified {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} camera. Rotation or cropping is unknown, so a generic 70 degree horizontal FOV is used instead of the mirror-camera specs.",
             ]
           warnings = intrinsics_warnings + [
-            f"SIMULATION ONLY: external-mirror position and orientation are unknown; geometry still assumes a level forward-facing camera at {SIMULATED_CAMERA_HEIGHT_M:.2f} m above a flat floor.",
-            f"Height sensitivity for assumed mount height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this excludes mount pose, FOV inconsistency, lens distortion, vehicle pitch, and pose error.",
-            "The displayed height is not a physical measurement. Measure the camera-to-vehicle pose and calibrate lens distortion before relying on metric height.",
+            f"REPORTED CAMERA POSITION: X 0.74 m aft, Y -0.85 m, Z 0.87 m in the supplied vehicle axes; camera height above ground is {SIMULATED_CAMERA_HEIGHT_M:.2f} m, giving ground Z=-0.28 m.",
+            f"STARTING POSE, NOT MEASURED: pitch {SIMULATED_CAMERA_PITCH_DEG:.0f} degrees (downward), roll {SIMULATED_CAMERA_ROLL_DEG:.0f} degrees; yaw assumes forward. Proposed search ranges are pitch {CAMERA_PITCH_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_PITCH_SEARCH_RANGE_DEG[1]:.0f} degrees and roll {CAMERA_ROLL_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_ROLL_SEARCH_RANGE_DEG[1]:.0f} degrees; no optimization has been performed.",
+            f"ILLUSTRATIVE ONLY: sensitivity to camera height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm. This is not a measured uncertainty interval and excludes camera orientation, FOV inconsistency, lens distortion, vehicle pitch, and pose error.",
+            "The displayed height is not a validated physical measurement. Measure camera orientation and calibrate lens distortion before relying on metric height.",
             "Morphology centimeters are image-space proportions scaled by the simulated person-box height; they are not calibrated physical dimensions.",
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]
@@ -1589,6 +1597,15 @@ class _HmiHandler(BaseHTTPRequestHandler):
         logger.info("HMI server: " + format, *args)
 
 
+class _HmiServer(HTTPServer):
+  allow_reuse_address = not hasattr(socket, "SO_EXCLUSIVEADDRUSE")
+
+  def server_bind(self) -> None:
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+      self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    super().server_bind()
+
+
 def run() -> None:
     parser = argparse.ArgumentParser(
         description="Launch the local driver seat-settings HMI prototype."
@@ -1603,7 +1620,14 @@ def run() -> None:
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
 
-    server = HTTPServer(("127.0.0.1", args.port), _HmiHandler)
+    try:
+      server = _HmiServer(("127.0.0.1", args.port), _HmiHandler)
+    except OSError as error:
+      parser.exit(
+        1,
+        f"Cannot start HMI on port {args.port}: {error}. "
+        "Stop the existing HMI or choose another port with --port.\n",
+      )
     url = f"http://127.0.0.1:{args.port}/"
     print(f"Seat HMI prototype running at {url}")
     print("Press Ctrl+C to stop. No real seat actuation is connected.")

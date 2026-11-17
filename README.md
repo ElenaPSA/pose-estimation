@@ -2,7 +2,7 @@
 
 A Python project for detecting a driver's body pose, summarizing image-space morphology, and previewing illustrative seat adjustments. The primary browser workflow accepts a **local video file**; it does not use a webcam.
 
-> **Height is not calibrated by default.** For matching image geometry, the HMI uses the supplied camera resolution and horizontal/vertical FOV to estimate pinhole intrinsics; otherwise it falls back to a generic model. The external-mirror camera position, orientation, and lens distortion are not calibrated. The HMI still uses a placeholder level, forward-facing pose at 0.85 m above ground; displayed height is not a physical measurement.
+> **Height is not fully calibrated.** The HMI uses the supplied camera resolution and horizontal/vertical FOV for matching landscape images and portrait images rotated 90 degrees anticlockwise and resized without cropping; other landscape aspect ratios use a generic model. It uses the reported camera position and 1.15 m height above ground and the suggested pitch and roll starting values, but camera orientation and lens distortion remain unmeasured. Displayed height is not a validated physical measurement.
 
 ## What the Project Does
 
@@ -72,13 +72,15 @@ driver-seat-hmi --port 8766
 python -m driver_pose_estimation.seat_hmi --port 8766
 ```
 
-The browser plays the uploaded video while checking frames. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback processes sampled frames from the original and displays them instead. Frame checks are sequential, capped at 240 samples; inference time can cause brief appearances between checks to be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
+Each running server keeps its HTML and JavaScript version together. After changing code, stop the old server with `Ctrl+C` and launch it again. The HMI refuses to start if the requested port is already in use; stop the existing server or select a different port with `--port`.
+
+The browser plays the uploaded video while a separate video element scans up to four frames per second, capped at 240 samples, independent of inference time. The preview pauses on the selected frame during analysis and resumes afterward. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback scans up to four original frames per second, capped at 240 and at the source frame count, and displays sampled frames instead. Brief appearances between checks may still be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
 
 The HMI temporarily stores the upload and any transcoded preview in a system temporary directory and removes them when processing finishes. It does not save permanent copies or send video externally. A browser decoding error can produce an aborted source-blob request in the developer console; the local transcode/fallback handles that case.
 
 ## Height Estimate and Camera Assumptions
 
-For frames matching the specified camera aspect ratio, the HMI uses the supplied specifications to form a pinhole camera matrix. These are reported specifications, not a chessboard calibration:
+For matching landscape frames and portrait frames assumed to be rotated from this camera, the HMI uses the supplied specifications to form a pinhole camera matrix. These are reported specifications, not a chessboard calibration:
 
 | Parameter | Default assumption |
 |---|---:|
@@ -88,15 +90,22 @@ For frames matching the specified camera aspect ratio, the HMI uses the supplied
 | Reported diagonal field of view | 113.83 degrees |
 | Derived focal lengths | `fx ≈ 886.70 px`, `fy ≈ 1361.92 px` |
 | Lens distortion | Assumed zero, not measured |
-| Mirror camera position and orientation | Unknown; placeholder assumes level, facing forward at 0.85 m |
-| Ground plane | Vehicle `z = 0` |
-| Sensitivity interval | 0.75-0.95 m camera height |
+| Reported mirror camera position | X = 0.74 m aft, Y = -0.85 m, Z = 0.87 m in the supplied vehicle frame |
+| Camera pitch / roll starting values | -10 degrees downward / 0 degrees; yaw assumed forward |
+| Proposed pitch / roll search ranges | -15 to -5 degrees / -3 to +3 degrees; not optimized |
+| Camera height above ground | 1.15 m |
+| Ground plane | Vehicle `z = -0.28 m` |
+| Illustrative camera-height sensitivity | 1.05-1.25 m; not a measured uncertainty interval |
 
-The supplied FOVs are internally inconsistent for a rectilinear camera at this resolution: horizontal and vertical FOV imply a diagonal FOV of about 102.54 degrees, not the reported 113.83 degrees. The HMI retains the diagonal value as reported metadata and warns about the discrepancy; it does not use it to create a camera matrix. The supplied profile is applied only to frames with the same aspect ratio, assuming a full-frame resize and no crop or rotation. For other aspect ratios, including portrait video, the HMI falls back to the original generic 70-degree horizontal-FOV simulation and reports that the camera profile was not applied. Aspect ratio alone cannot verify matching camera settings or crop. A chessboard calibration should replace these approximate intrinsics and measure lens distortion.
+The supplied FOVs are internally inconsistent for a rectilinear camera at this resolution: horizontal and vertical FOV imply a diagonal FOV of about 102.54 degrees, not the reported 113.83 degrees. The HMI retains the diagonal value as reported metadata and warns about the discrepancy; it cannot consistently use all three FOVs to create one rectilinear camera matrix. A chessboard calibration should replace these approximate intrinsics and measure lens distortion.
+
+Portrait frames use the specified native intrinsics rotated 90 degrees anticlockwise, swapping the focal-length axes, and scaled to the frame dimensions. The user reports that the video is not cropped. The whole sensor image is therefore assumed to have been resized, potentially with different horizontal and vertical scale factors. The reported video is 1080 × 1920, whereas the rotated 2048 × 1280 native frame would be 1280 × 2048; rotation alone cannot account for this difference. Unmatched landscape aspect ratios still use the generic 70-degree simulation. The pose uses the suggested -10-degree pitch, 0-degree roll, and assumed forward yaw relative to the displayed image axes; these are not measured camera extrinsics.
 
 For height, the code uses the person-box top center as the head image point and the box bottom plus ankle-centered horizontal position as the ground-contact image point. It undistorts those pixels, constructs rays, intersects the foot ray with the ground plane, and projects the head ray onto the same vertical line. The reported sensitivity interval recomputes height at the two mount-height endpoints; it does not cover uncertainty in FOV, pitch, roll, lens distortion, vehicle pitch, body lean, or landmark placement.
 
-This is a geometry simulation, **not camera calibration**. A plausible-looking number does not make the assumed camera parameters true. In particular, the camera's position and orientation in the external left mirror are not provided, and the placeholder forward-facing pose may be substantially different from the real mount. Measure the camera pose relative to the vehicle floor and calibrate lens distortion before using metric height. Treat HMI estimates as demonstrations only.
+The provided diagram has X positive aft, Y positive right, and Z positive up. The HMI maps the reported (0.74, -0.85, 0.87) m to its existing [right, forward, up] convention as (-0.85, -0.74, 0.87) m, assuming the origins coincide. With the separately measured camera height of 1.15 m above ground, the ground plane is at vehicle Z = 0.87 - 1.15 = -0.28 m. Geometry uses the camera's vehicle-frame position and this ground plane; height is measured relative to the ground, not the vehicle Z origin.
+
+This remains a geometry simulation, **not a complete camera calibration**. Pitch is defined positive upward, so -10 degrees points the optical axis downward; roll is a rotation about the displayed camera optical axis, with zero meaning no optical-axis roll. The suggested pitch and roll are starting values, not measurements. The specified search ranges are retained for future calibration but are not automatically optimized without independently measured reference data. Measure camera orientation relative to the vehicle and calibrate lens distortion before using metric height. Changing horizontal camera position changes reconstructed vehicle-frame ground coordinates but, for the same rays and flat ground, does not itself change the person's height. Treat HMI estimates as demonstrations only.
 
 For a level camera with a centered principal point and no distortion, the focal length cancels from the estimated height for the same head and foot pixels. Consequently, supplying a different FOV alone may not change the result or improve accuracy; measured camera height, pitch and roll, lens distortion, and video rotation/crop are needed to establish the actual geometry.
 
@@ -111,7 +120,7 @@ the simulated height are illustrative only.
 
 ## Optional Camera Calibration Tools
 
-The calibration utility estimates **intrinsics and lens distortion** from chessboard images. It does not infer a vehicle camera mount pose from the chessboard. You must separately measure the external-mirror camera position and orientation relative to the vehicle/floor frame if using calibrated geometry. This is important for a side-mounted camera, whose orientation is not represented by the HMI's placeholder forward-facing pose.
+The calibration utility estimates **intrinsics and lens distortion** from chessboard images. It does not infer a vehicle camera mount pose from the chessboard. The reported camera position and height above ground are included in the simulated HMI profile, but its orientation must be measured for calibrated geometry. This is important for a side-mounted camera, whose orientation is not represented by the HMI's placeholder forward-facing pose.
 
 Example with a 9-by-6 inner-corner board and measured 25 mm squares:
 
@@ -140,7 +149,7 @@ The pose file contains numeric values in this shape:
 }
 ```
 
-**The values above are placeholders, not a calibration for this vehicle.** `position_m` is `[right, forward, up]` in the vehicle frame. The rotation maps OpenCV camera axes (`x right, y down, z forward`) into vehicle axes (`x right, y forward, z up`). The vehicle floor is `z=0`. The JSON includes chessboard reprojection RMS; a low RMS alone does not validate the measured camera pose or height estimate.
+**The values above are placeholders, not a calibration for this vehicle.** `position_m` is `[right, forward, up]` in the vehicle frame. The rotation maps OpenCV camera axes (`x right, y down, z forward`) into vehicle axes (`x right, y forward, z up`). Optionally include `ground_plane_z_m` in the pose object; it defaults to 0 for existing calibration files. For the reported mirror measurements it is -0.28 m. The JSON includes chessboard reprojection RMS; a low RMS alone does not validate the measured camera pose or height estimate.
 
 The current HMI always uses its built-in simulated profile and has no calibration-file input. The `/analyze` API accepts a `camera_calibration` object for integrations that supply measured calibration. Do not copy the example pose values into a real measurement workflow.
 

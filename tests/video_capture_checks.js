@@ -1,4 +1,5 @@
 function runVideoCaptureChecks(api) {
+  if (api.sampleTimes(10).length !== 40) throw new Error("Expected four samples per second.");
   for (const duration of [.0001, .2, 1, 10, 120, 600, 3600]) {
     const times = api.sampleTimes(duration);
     if (!times.length || times.length > 240) throw new Error("Unbounded video sampling.");

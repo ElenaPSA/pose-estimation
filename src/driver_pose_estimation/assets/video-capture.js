@@ -1,7 +1,7 @@
 const VideoCapture = (() => {
   function sampleTimes(duration) {
     if (!Number.isFinite(duration) || duration <= 0) throw new Error("Video duration is unavailable.");
-    const count = Math.min(240, Math.max(1, Math.ceil(duration * 2)));
+    const count = Math.min(240, Math.max(1, Math.ceil(duration * 4)));
     return Array.from({length: count}, (_, i) => (i + .5) * duration / count);
   }
   function waitFor(video, event, action, signal) {
@@ -47,6 +47,10 @@ const VideoCapture = (() => {
     const input = document.getElementById("videoFile");
     const fileStatus = document.getElementById("videoFileStatus");
     const video = document.getElementById("sourceVideo");
+    const scanVideo = document.createElement("video");
+    scanVideo.muted = true;
+    scanVideo.playsInline = true;
+    scanVideo.preload = "auto";
     const canvas = document.createElement("canvas");
     const status = document.getElementById("profileStatus");
     const preview = document.getElementById("decodedVideoPreview");
@@ -78,7 +82,7 @@ const VideoCapture = (() => {
         } catch (error) {
           if (signal.aborted) throw error;
           try {
-            status.textContent = "Converting the local video to browser-compatible WebM…";
+            status.textContent = "Converting the local video to browser-compatible MP4…";
             const response = await fetch("/transcode-video", {
               method: "POST",
               signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
@@ -124,7 +128,7 @@ const VideoCapture = (() => {
               if (event.type === "frame") {
                 preview.src = event.image;
                 status.textContent = `Local decoded preview (sampled frames): ${event.timestamp.toFixed(2)} s. Checking full-body visibility…`;
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 250));
                 signal.throwIfAborted();
               } else if (event.type === "captured") {
                 preview.src = event.image;
@@ -154,7 +158,11 @@ const VideoCapture = (() => {
           }
         }
         video.hidden = false;
-        sampleTimes(video.duration);
+        const times = sampleTimes(video.duration);
+        await waitFor(scanVideo, "loadeddata", () => {
+          scanVideo.src = url;
+          scanVideo.load();
+        }, signal);
         const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
         canvas.width = Math.round(video.videoWidth * scale);
         canvas.height = Math.round(video.videoHeight * scale);
@@ -168,11 +176,11 @@ const VideoCapture = (() => {
         let bestObservation = null;
         let bestQuality = -1;
         let reason = "No suitable person detected.";
-        while (!video.ended) {
+        for (const time of times) {
           signal.throwIfAborted();
-          const time = video.currentTime;
-          status.textContent = `Playing video / checking full body at ${time.toFixed(2)} s. ${reason}`;
-          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          await waitFor(scanVideo, "seeked", () => { scanVideo.currentTime = time; }, signal);
+          status.textContent = `Scanning video at ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
+          context.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
           const image = canvas.toDataURL("image/jpeg", .9);
           const response = await fetch("/probe-frame", {
             method: "POST",
@@ -234,15 +242,18 @@ const VideoCapture = (() => {
               ? "Detection confidence is below the required level."
               : result.reason || "The detected person changed or was not confirmed.";
           }
-          status.textContent = `Playing video / checking ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
-          if (video.ended) break;
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (video.ended) break;
+          status.textContent = `Scanning video at ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
         }
         if (!bestObservation) {
           throw new Error(`No high-confidence complete-body frame in ${examined} checks. ${reason} Move closer while keeping the head and both feet inside the frame.`);
         }
-        status.textContent = `Video ended. Scanning the closest complete frame at ${bestObservation.timestamp.toFixed(2)} s…`;
+        video.pause();
+        if (Math.abs(video.currentTime - bestObservation.timestamp) > .001) {
+          await waitFor(video, "seeked", () => {
+            video.currentTime = bestObservation.timestamp;
+          }, signal);
+        }
+        status.textContent = `Video scan complete. Analyzing the closest complete frame at ${bestObservation.timestamp.toFixed(2)} s…`;
         await captured(bestObservation.image, bestObservation.timestamp, signal);
       } catch (error) {
         status.textContent = signal.aborted ? "Video analysis cancelled. Choose a video to try again." :
@@ -250,7 +261,13 @@ const VideoCapture = (() => {
           error.message || "Video processing failed.";
         document.getElementById("detectionStatus").textContent = status.textContent;
       } finally {
-        video.pause();
+        if (!video.hidden && !signal.aborted) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+        scanVideo.removeAttribute("src");
+        scanVideo.load();
         input.disabled = false;
         input.value = "";
         controller = null;

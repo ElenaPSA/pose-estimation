@@ -18,7 +18,7 @@ from driver_pose_estimation.models import (
     Keypoint,
     PoseDetection,
 )
-from driver_pose_estimation.seat_hmi import HTML, MorphologyAnalyzer, _HmiHandler
+from driver_pose_estimation.seat_hmi import HTML, MorphologyAnalyzer, _HmiHandler, _HmiServer
 
 
 def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
@@ -30,6 +30,8 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'src="/assets/seat-studio.js"' in HTML
     assert "SeatStudio.mount();" in HTML
     assert "SeatStudio.update(h);" in HTML
+    assert 'id="seatStudioUnavailable"' in HTML
+    assert "const previewAvailable = h >= 120 && h <= 230;" in HTML
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in HTML
     assert "NO SEAT ACTUATION" in HTML
     assert 'src="/assets/seat-reference-side.png"' not in HTML
@@ -52,7 +54,8 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
     assert "2048 × 1280 camera specs" in HTML
     assert "98.22° horizontal, 50.34° vertical" in HTML
-    assert "0.85m level, forward-facing pose is only a placeholder" in HTML
+    assert "Mirror position: X 74 cm, Y -85 cm, Z 87 cm" in HTML
+    assert "camera height above ground: 115 cm" in HTML
     assert 'src="/assets/video-capture.js"' in HTML
     assert "VideoCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
@@ -78,8 +81,6 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "detectionColorImage.src = dataUrl;" in HTML
     assert "detectionColorImage.style.clipPath =" in HTML
     assert "await scanAnimation;" in HTML
-    assert "cameraCalibrationFile" not in video_source
-    assert "cameraCalibration" not in video_source
     assert HTML.count('<line id="cameraTo') == 4
     assert '<rect id="detectedPersonBox" class="person-box"/>' in HTML
     assert "<polygon" not in HTML
@@ -90,7 +91,7 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "MODEL PERFORMANCE" in HTML
     assert 'id="morphologyConfidence"' in HTML
     assert 'id="faceConfidence"' in HTML
-    assert "not physical measurements" in HTML
+    assert "physical height cannot be established" in HTML
     assert 'id="measureHeight"' in HTML
     assert 'id="measureShoulder"' in HTML
     assert 'id="measureHip"' in HTML
@@ -111,6 +112,38 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "proportionWord" not in HTML
     assert HTML.index("LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("DRIVER DIMENSIONS")
     assert HTML.index("SIMULATED CAMERA ESTIMATE · NOT CALIBRATED") < HTML.index('id="seatStudio"')
+
+
+def test_hmi_server_rejects_duplicate_port() -> None:
+    with _HmiServer(("127.0.0.1", 0), _HmiHandler) as server:
+        with pytest.raises(OSError):
+            with _HmiServer(("127.0.0.1", server.server_port), _HmiHandler):
+                pass
+
+
+def test_hmi_uses_script_snapshot_when_asset_changes(monkeypatch) -> None:
+    original_read_bytes = Path.read_bytes
+
+    def reject_video_asset_read(path):
+        if path.name == "video-capture.js":
+            raise OSError("Asset changed after server startup")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_video_asset_read)
+    server = HTTPServer(("127.0.0.1", 0), _HmiHandler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request("GET", "/assets/video-capture.js")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.read() == _HmiHandler.script_assets["video-capture.js"]
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_hmi_serves_dashboard_locally() -> None:
@@ -142,18 +175,22 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert video_response.status == 200
         assert video_response.getheader("Content-Type") == "text/javascript; charset=utf-8"
         video_source = video_response.read().decode()
+        assert "cameraCalibrationFile" not in video_source
+        assert "cameraCalibration" not in video_source
         assert 'fetch("/probe-frame"' in video_source
         assert 'fetch("/stream-video"' in video_source
         assert 'fetch("/transcode-video"' in video_source
         assert 'Playing converted local video' in video_source
         assert "Selected video: ${file.name}" in video_source
         assert "await video.play();" in video_source
+        assert "video.play().catch(() => {});" in video_source
         assert "confirmations >= 2 && observation.nearCamera" in video_source
         assert "confirmations >= 3" in video_source
-        assert "while (!video.ended)" in video_source
-        assert "result.confident && sameTrack" in video_source
+        assert "for (const time of times)" in video_source
+        assert "context.drawImage(scanVideo" in video_source
+        assert "validCandidate && sameTrack" in video_source
         assert "observation.nearCamera" in video_source
-        assert "Video ended. Scanning the closest complete frame" in video_source
+        assert "Video scan complete. Analyzing the closest complete frame" in video_source
         assert 'document.getElementById("cancelVideo")' not in video_source
         assert video_source.index("await video.play();") < video_source.index('fetch("/probe-frame"')
         for name in (
@@ -481,6 +518,47 @@ def video_pose() -> FramePoseResult:
     return FramePoseResult(0, 0, 1, 1, pose, [pose])
 
 
+@pytest.mark.parametrize(
+    "box_bottom",
+    [235, 225],
+)
+def test_video_analysis_uses_reported_camera_height(
+    monkeypatch, box_bottom
+) -> None:
+    class Estimator:
+        def estimate(self, image, *args):
+            result = video_pose()
+            result.driver.bounding_box = BoundingBox(50, 10, 150, box_bottom)
+            return result
+
+    class FaceDetector:
+        def detect(self, image, pose):
+            return None
+
+    monkeypatch.setattr(_HmiHandler, "pose_estimator", Estimator())
+    monkeypatch.setattr(_HmiHandler, "face_detector", FaceDetector())
+    ok, encoded = cv2.imencode(".png", np.zeros((250, 200, 3), dtype=np.uint8))
+    assert ok
+    handler = object.__new__(_HmiHandler)
+    result = handler._analyze_payload({
+        "mode": "video_demo",
+        "frontal": {"image": "data:image/png;base64," + base64.b64encode(encoded).decode()},
+    })
+
+    camera = CameraCalibration.simulated_for_image((200, 250))
+    expected_height = camera.estimate_height_cm(
+        (100, 10), (100, box_bottom), (200, 250)
+    ).height_cm
+    assert result["height_cm"] == pytest.approx(expected_height, abs=0.1)
+    assert result["height_sensitivity_range_cm"][1] == pytest.approx(expected_height * 1.25 / 1.15, abs=0.1)
+    assert result["calibration_mode"] == "simulated_vehicle_camera"
+    assert any("ground Z=-0.28 m" in warning for warning in result["warnings"])
+    assert any("STARTING POSE, NOT MEASURED: pitch -10" in warning for warning in result["warnings"])
+    assert any("no optimization has been performed" in warning for warning in result["warnings"])
+    assert any("90 degree anticlockwise" in warning for warning in result["warnings"])
+    assert any("FOV SPECIFICATION MISMATCH" in warning for warning in result["warnings"])
+
+
 def test_video_accepts_complete_body_pose() -> None:
     assert _HmiHandler._full_body_reason(
         video_pose(), np.zeros((250, 200, 3))
@@ -565,7 +643,7 @@ def test_video_tracker_ignores_initial_ineligible_detection(tmp_path) -> None:
     captured = handler._capture_video(len(video_bytes))
 
     assert probes == 3
-    assert captured["timestamp"] == 1.2
+    assert captured["timestamp"] == 0.6
 
 
 def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
@@ -581,7 +659,7 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
                 50,
                 10,
                 150,
-                215,
+                235,
                 min(1.0, 0.1 + float(image[0, 0, 0]) / 255),
             )
             return pose_result
@@ -593,7 +671,8 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
             return FaceBox(90, 15, 20, self.height, .9) if self.height else None
 
     face = FaceDetector()
-    monkeypatch.setattr(_HmiHandler, "pose_estimator", Estimator())
+    estimator = Estimator()
+    monkeypatch.setattr(_HmiHandler, "pose_estimator", estimator)
     monkeypatch.setattr(_HmiHandler, "face_detector", face)
     ok, encoded = cv2.imencode(".png", np.zeros((250, 200, 3), dtype=np.uint8))
     assert ok
@@ -618,7 +697,7 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
             "x1": 0.25,
             "y1": 0.04,
             "x2": 0.75,
-            "y2": 0.86,
+            "y2": 0.94,
         }
         assert probe["quality_score"] > 0
         assert "confidence_score" in probe
@@ -627,9 +706,9 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert status == 200
         simulated_model = CameraCalibration.simulated_for_image((200, 250))
         expected_height = simulated_model.estimate_height_cm(
-            (100, 10), (100, 215), (200, 250)
+            (100, 10), (100, 235), (200, 250)
         ).height_cm
-        expected_span_cm = 176 * expected_height / 205
+        expected_span_cm = 176 * expected_height / 225
         assert analysis["height_cm"] == round(expected_height, 1)
         assert analysis["estimation_mode"] == "simulated_camera_geometry"
         assert analysis["calibration_mode"] == "simulated_vehicle_camera"
@@ -648,9 +727,10 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
             .2557 * expected_span_cm, abs=.1
         )
         assert analysis["height_sensitivity_range_cm"] is not None
-        assert any("SIMULATION ONLY" in warning for warning in analysis["warnings"])
-        assert any("does not match the specified" in warning for warning in analysis["warnings"])
-        assert any("external-mirror position and orientation are unknown" in warning for warning in analysis["warnings"])
+        assert any("90 degree anticlockwise" in warning for warning in analysis["warnings"])
+        assert any("FOV SPECIFICATION MISMATCH" in warning for warning in analysis["warnings"])
+        assert any("ground Z=-0.28 m" in warning for warning in analysis["warnings"])
+        assert any("STARTING POSE, NOT MEASURED: pitch -10" in warning for warning in analysis["warnings"])
         assert analysis["face_detection_confidence"] == pytest.approx(.9)
         morphology = analysis["morphology_proportions"]
         assert morphology["reference_span_px"] == pytest.approx(176.0)
@@ -663,13 +743,13 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         morphology_cm = analysis["morphology_dimensions_cm"]
         reference_span_cm = analysis["morphology_reference_span_cm"]
         assert morphology_cm["shoulder_width"] == pytest.approx(
-            morphology["shoulder_width_over_span"] * reference_span_cm
+            morphology["shoulder_width_over_span"] * reference_span_cm, abs=.1
         )
         assert morphology_cm["hip_width"] == pytest.approx(
-            morphology["hip_width_over_span"] * reference_span_cm
+            morphology["hip_width_over_span"] * reference_span_cm, abs=.1
         )
         assert morphology_cm["total_leg_length"] == pytest.approx(
-            morphology["total_leg_length_over_span"] * reference_span_cm
+            morphology["total_leg_length_over_span"] * reference_span_cm, abs=.1
         )
         calibration = {
             "schema_version": 1,
@@ -697,9 +777,9 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert status == 200
         assert calibrated["estimation_mode"] == "calibrated_camera_geometry"
         assert calibrated["calibration_mode"] == "vehicle_camera"
-        assert calibrated["height_cm"] == pytest.approx(175.7, abs=0.2)
+        assert calibrated["height_cm"] == pytest.approx(168.75, abs=0.2)
         assert calibrated["height_geometry_residual_m"] < 0.001
-        assert calibrated["dimensions_cm"]["shoulder_width"] is None
+        assert calibrated["dimensions_cm"]["shoulder_width"] == calibrated["morphology_dimensions_cm"]["shoulder_width"]
         assert not any("assumed to be 20 cm" in warning for warning in calibrated["warnings"])
         payload.pop("camera_calibration")
         video_path = tmp_path / "input.avi"
@@ -724,7 +804,7 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert response.status == 200
         assert response.getheader("Content-Type") == "application/x-ndjson"
         events = [json.loads(line) for line in response.read().splitlines()]
-        assert [event["type"] for event in events] == ["frame"] * 8 + ["captured"]
+        assert [event["type"] for event in events] == ["frame"] * 15 + ["captured"]
         assert events[-1]["image"] == events[-2]["image"]
         assert events[-1]["timestamp"] == events[-2]["timestamp"]
         assert events[0]["timestamp"] < events[1]["timestamp"]
@@ -746,12 +826,15 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         connection.request("POST", "/capture-video", video_bytes, {"Content-Type": "application/octet-stream"})
         response = connection.getresponse()
         assert response.status == 400
-        assert "No confirmed full-body" in json.loads(response.read())["error"]
+        capture_error = json.loads(response.read())["error"]
+        assert "No high-confidence complete-body frame" in capture_error
+        assert "Required confidence is 70%" in capture_error
         connection.request("POST", "/stream-video", video_bytes, {"Content-Type": "application/octet-stream"})
         response = connection.getresponse()
         events = [json.loads(line) for line in response.read().splitlines()]
         assert events[0]["type"] == "frame"
-        assert "No confirmed full-body" in events[-1]["error"]
+        assert "No high-confidence complete-body frame" in events[-1]["error"]
+        assert "Required confidence is 70%" in events[-1]["error"]
         assert list(tmp_path.iterdir()) == [video_path]
     finally:
         connection.close()

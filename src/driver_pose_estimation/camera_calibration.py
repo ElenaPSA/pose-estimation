@@ -26,8 +26,13 @@ IMPLIED_DIAGONAL_FOV_DEG = math.degrees(
         )
     )
 )
-SIMULATED_CAMERA_HEIGHT_M = 0.85
-SIMULATED_CAMERA_HEIGHT_RANGE_M = (0.75, 0.95)
+MIRROR_CAMERA_POSITION_VEHICLE_M = (-0.85, -0.74, 0.87)
+SIMULATED_CAMERA_HEIGHT_M = 1.15
+SIMULATED_CAMERA_HEIGHT_RANGE_M = (1.05, 1.25)
+SIMULATED_CAMERA_PITCH_DEG = -10.0
+SIMULATED_CAMERA_ROLL_DEG = 0.0
+CAMERA_PITCH_SEARCH_RANGE_DEG = (-15.0, -5.0)
+CAMERA_ROLL_SEARCH_RANGE_DEG = (-3.0, 3.0)
 
 
 class CameraCalibrationError(ValueError):
@@ -53,6 +58,7 @@ class CameraCalibration:
     horizontal_fov_deg: float | None = None
     vertical_fov_deg: float | None = None
     reported_diagonal_fov_deg: float | None = None
+    ground_plane_z_m: float = 0.0
 
     @classmethod
     def from_dict(cls, data: object) -> CameraCalibration:
@@ -111,6 +117,7 @@ class CameraCalibration:
 
         position: tuple[float, float, float] | None = None
         rotation: np.ndarray | None = None
+        ground_plane_z = 0.0
         mount = data.get("camera_to_vehicle")
         if mount is not None:
             if not isinstance(mount, dict):
@@ -130,6 +137,12 @@ class CameraCalibration:
             if not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-3):
                 raise CameraCalibrationError("Mount rotation matrix determinant must be +1.")
             position = tuple(float(value) for value in position_values)
+            try:
+                ground_plane_z = float(mount.get("ground_plane_z_m", 0.0))
+            except (TypeError, ValueError) as error:
+                raise CameraCalibrationError("ground_plane_z_m must be finite.") from error
+            if not np.isfinite(ground_plane_z):
+                raise CameraCalibrationError("ground_plane_z_m must be finite.")
 
         return cls(
             image_width=image_size[0],
@@ -142,6 +155,7 @@ class CameraCalibration:
             horizontal_fov_deg=horizontal_fov,
             vertical_fov_deg=vertical_fov,
             reported_diagonal_fov_deg=diagonal_fov,
+            ground_plane_z_m=ground_plane_z,
         )
 
     @classmethod
@@ -151,6 +165,8 @@ class CameraCalibration:
         camera_height_m: float = SIMULATED_CAMERA_HEIGHT_M,
         horizontal_fov_deg: float = SIMULATED_HORIZONTAL_FOV_DEG,
         vertical_fov_deg: float = SIMULATED_VERTICAL_FOV_DEG,
+        pitch_deg: float = SIMULATED_CAMERA_PITCH_DEG,
+        roll_deg: float = SIMULATED_CAMERA_ROLL_DEG,
     ) -> CameraCalibration:
         """Build spec-based or generic intrinsics with assumed vehicle extrinsics."""
         width, height = image_size_px
@@ -160,45 +176,78 @@ class CameraCalibration:
             camera_height_m <= 0
             or not 1 < horizontal_fov_deg < 179
             or not 1 < vertical_fov_deg < 179
+            or not np.isfinite(pitch_deg)
+            or not np.isfinite(roll_deg)
+            or not -90 < pitch_deg < 90
+            or not -180 <= roll_deg <= 180
         ):
             raise CameraCalibrationError("Invalid simulated camera assumptions.")
+        rotated_image = height > width
         matches_camera_aspect = abs(
             width / height - CAMERA_IMAGE_SIZE_PX[0] / CAMERA_IMAGE_SIZE_PX[1]
         ) <= 1e-3
-        if not matches_camera_aspect:
+        if not rotated_image and not matches_camera_aspect:
             horizontal_fov_deg = 70.0
             vertical_fov_deg = math.degrees(
                 2 * math.atan(height / width * math.tan(math.radians(horizontal_fov_deg) / 2))
             )
-        focal_x = width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
-        focal_y = height / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
+        if rotated_image:
+            native_width, native_height = CAMERA_IMAGE_SIZE_PX
+            native_focal_x = native_width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
+            native_focal_y = native_height / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
+            scale_x = width / native_height
+            scale_y = height / native_width
+            focal_x = native_focal_y * scale_x
+            focal_y = native_focal_x * scale_y
+            center_x = (native_height / 2 + 0.5) * scale_x - 0.5
+            center_y = (native_width / 2 - 0.5) * scale_y - 0.5
+        else:
+            focal_x = width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
+            focal_y = height / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
+            center_x = width / 2
+            center_y = height / 2
+        pitch = math.radians(pitch_deg)
+        roll = math.radians(roll_deg)
+        pitch_rotation = np.asarray([
+            [1.0, 0.0, 0.0],
+            [0.0, math.cos(pitch), -math.sin(pitch)],
+            [0.0, math.sin(pitch), math.cos(pitch)],
+        ])
+        level_rotation = np.asarray([
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0],
+        ])
+        roll_rotation = np.asarray([
+            [math.cos(roll), -math.sin(roll), 0.0],
+            [math.sin(roll), math.cos(roll), 0.0],
+            [0.0, 0.0, 1.0],
+        ])
         return cls(
             image_width=width,
             image_height=height,
             camera_matrix=np.asarray(
                 [
-                    [focal_x, 0, width / 2],
-                    [0, focal_y, height / 2],
+                    [focal_x, 0, center_x],
+                    [0, focal_y, center_y],
                     [0, 0, 1],
                 ],
                 dtype=np.float64,
             ),
             distortion_coefficients=np.zeros(5, dtype=np.float64),
             reprojection_rms_px=None,
-            camera_position_vehicle_m=(0.0, 0.0, camera_height_m),
-            camera_to_vehicle_rotation=np.asarray(
-                [
-                    [1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [0.0, -1.0, 0.0],
-                ],
-                dtype=np.float64,
+            camera_position_vehicle_m=(
+                MIRROR_CAMERA_POSITION_VEHICLE_M[0],
+                MIRROR_CAMERA_POSITION_VEHICLE_M[1],
+                MIRROR_CAMERA_POSITION_VEHICLE_M[2],
             ),
+            camera_to_vehicle_rotation=pitch_rotation @ level_rotation @ roll_rotation,
             horizontal_fov_deg=horizontal_fov_deg,
             vertical_fov_deg=vertical_fov_deg,
             reported_diagonal_fov_deg=(
-                REPORTED_DIAGONAL_FOV_DEG if matches_camera_aspect else None
+                REPORTED_DIAGONAL_FOV_DEG if rotated_image or matches_camera_aspect else None
             ),
+            ground_plane_z_m=MIRROR_CAMERA_POSITION_VEHICLE_M[2] - camera_height_m,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -210,11 +259,12 @@ class CameraCalibration:
             mount = {
                 "position_m": list(self.camera_position_vehicle_m),
                 "rotation_matrix": self.camera_to_vehicle_rotation.tolist(),
+                "ground_plane_z_m": self.ground_plane_z_m,
             }
         return {
             "schema_version": 1,
             "coordinate_system": {
-                "vehicle_axes": "x right, y forward, z up; ground plane z=0",
+                "vehicle_axes": "x right, y forward, z up; ground plane at ground_plane_z_m",
                 "rotation_definition": (
                     "camera_to_vehicle_rotation maps OpenCV camera vectors "
                     "(x right, y down, z forward) into vehicle coordinates"
@@ -261,7 +311,7 @@ class CameraCalibration:
         `image_size_px` is `(width, height)`. The person is assumed upright and
         the foot and head points are assumed to share the same horizontal
         vehicle coordinates. Extrinsics must map OpenCV camera axes to the
-        documented vehicle axes and locate the camera relative to ground z=0.
+        documented vehicle axes and locate the camera relative to the ground plane.
         """
         if (
             self.camera_position_vehicle_m is None
@@ -294,12 +344,13 @@ class CameraCalibration:
 
         head_ray = vehicle_ray(normalized[0])
         foot_ray = vehicle_ray(normalized[1])
-        if camera_position[2] <= 0 or foot_ray[2] >= -1e-6:
+        camera_height_m = camera_position[2] - self.ground_plane_z_m
+        if not np.isfinite(camera_height_m) or camera_height_m <= 0 or foot_ray[2] >= -1e-6:
             raise CameraCalibrationError(
                 "Foot ray does not intersect the vehicle ground plane in front of camera."
             )
 
-        foot_distance = -camera_position[2] / foot_ray[2]
+        foot_distance = -camera_height_m / foot_ray[2]
         if foot_distance <= 0:
             raise CameraCalibrationError("Ground intersection is behind the camera.")
         foot_position = camera_position + foot_distance * foot_ray
@@ -322,7 +373,7 @@ class CameraCalibration:
                 f"(horizontal residual {residual:.3f} m)."
             )
 
-        height_m = float(projected_head[2])
+        height_m = float(projected_head[2] - self.ground_plane_z_m)
         if not 0.8 <= height_m <= 2.6:
             raise CameraCalibrationError(
                 f"Geometry produced implausible height {height_m:.2f} m."
