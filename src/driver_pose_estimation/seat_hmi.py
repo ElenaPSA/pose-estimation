@@ -16,6 +16,14 @@ from typing import ClassVar, cast
 import cv2
 import numpy as np
 
+from .camera_calibration import (
+  CameraCalibration,
+  CameraCalibrationError,
+  HeightEstimate,
+  SIMULATED_CAMERA_HEIGHT_M,
+  SIMULATED_CAMERA_HEIGHT_RANGE_M,
+  SIMULATED_HORIZONTAL_FOV_DEG,
+)
 from .config import Settings
 from .face_detector import FaceHeightDetector
 from .models import FramePoseResult, PoseDetection
@@ -301,14 +309,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         </div>
       </div>
       <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-      <p class="under-cta">DEMO ESTIMATES ONLY: scale assumes a 20 cm detected face height. Real height cannot be measured from an uncalibrated video. No vehicle commands.</p>
+      <p class="under-cta">Height uses a simulated camera model: nominal 70° field of view, 0.85m mount height, level and forward-facing. These values are assumptions, not measured calibration. No vehicle commands.</p>
     </div>
     <section class="left">
       <div class="card">
-        <h2 class="step">DRIVER DIMENSIONS <span class="info" title="Uncalibrated demo height assumes the detected face is 20 cm high; not a physical measurement.">i</span></h2>
-        <div class="height-line"><output id="heightValue">178</output><span>cm demo height (uncalibrated)</span></div>
-        <div class="range-wrap"><input id="height" type="range" min="120" max="230" value="178" aria-label="Estimated driver height in centimetres">
-          <div class="range-labels"><span>120</span><span>147</span><span>175</span><span>202</span><span>230 cm</span></div></div>
+        <h2 class="step">DRIVER DIMENSIONS <span class="info" title="The default simulated camera model is not a measured physical height.">i</span></h2>
+        <div class="height-line"><output id="heightValue">178</output><span id="heightUnitLabel">cm · simulated camera model</span></div>
+        <div class="range-wrap"><input id="height" type="range" min="80" max="260" value="178" aria-label="Estimated driver height in centimetres">
+          <div class="range-labels"><span>80</span><span>125</span><span>170</span><span>215</span><span>260 cm</span></div></div>
       </div>
 
       <div class="card">
@@ -330,16 +338,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
     <section class="right">
       <div class="card">
-        <div class="result-title measurements-title">APPROXIMATE DRIVER DEMO ESTIMATES</div>
+        <div class="result-title measurements-title">SIMULATED CAMERA ESTIMATE · NOT CALIBRATED</div>
         <div class="parameters">
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Estimated height</span><span class="param-value"><span id="measureHeight">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Shoulder width</span><span class="param-value"><span id="measureShoulder">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Hip width</span><span class="param-value"><span id="measureHip">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name">Face height (assumed scale)</span><span class="param-value"><span id="measureFace">—</span><small>cm · not measured</small></span></div>
+          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name" id="faceHeightName">Face height (not estimated)</span><span class="param-value"><span id="measureFace">—</span><small>cm · not measured</small></span></div>
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Torso length</span><span class="param-value"><span id="measureTorso">—</span><small>cm</small></span></div>
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Leg length</span><span class="param-value"><span id="measureLegs">—</span><small>cm · upper + lower leg</small></span></div>
         </div>
-        <div id="measurementNote" class="under-cta">Uncalibrated demo estimates assume a 20 cm detected face height; they are not physical measurements. Torso and leg lengths are unavailable.</div>
+        <div id="measurementNote" class="under-cta">Camera parameters are simulated; physical height cannot be established from the video alone.</div>
       </div>
       <div class="card">
         <div class="result-title">MODEL PERFORMANCE</div>
@@ -553,6 +561,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       showDetectionBox(result.detection_bbox);
       const h = result.height_cm;
       height.value = String(clamp(Math.round(h), Number(height.min), Number(height.max)));
+      const calibrated = result.calibration_mode === "vehicle_camera";
+      const simulated = result.calibration_mode === "simulated_vehicle_camera";
+      document.querySelector(".measurements-title").textContent = calibrated
+        ? "CALIBRATED CAMERA HEIGHT"
+        : simulated
+          ? "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED"
+          : "REFERENCE-MARKER ESTIMATE";
+      document.getElementById("heightUnitLabel").textContent = calibrated
+        ? "cm · calibrated camera geometry"
+        : simulated
+          ? "cm · simulated camera model"
+          : "cm · reference marker";
+      document.getElementById("faceHeightName").textContent = calibrated || simulated
+        ? "Face height (not estimated)"
+        : "Face height";
       selectSize(result.size_class, false);
       selectBuild(result.build_category);
       render();
@@ -569,9 +592,12 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         result.face_detection_confidence == null
           ? "Unavailable"
           : `${(result.face_detection_confidence * 100).toFixed(0)}%`;
-      document.getElementById("measurementNote").textContent =
-        `Uncalibrated demo height: ${h.toFixed(1)} cm, assuming detected face height = 20 cm. ${result.warnings.join(" ")}`;
-      status.textContent = `Automatic analysis complete at ${timestamp.toFixed(2)} s. Demo estimates only, not physical measurements or ergonomic recommendations.`;
+      document.getElementById("measurementNote").textContent = result.warnings.join(" ");
+      status.textContent = calibrated
+        ? `Calibrated camera height estimate complete at ${timestamp.toFixed(2)} s. Review the calibration and geometry residual before use.`
+        : simulated
+          ? `Simulated camera estimate complete at ${timestamp.toFixed(2)} s. Review the mount-height sensitivity; this is not calibrated.`
+          : `Reference-marker analysis complete at ${timestamp.toFixed(2)} s.`;
     } catch (error) {
       detectionViewport.classList.remove("scanning", "detected");
       clearDetectionStatusTimers();
@@ -584,6 +610,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       detectionViewport.classList.remove("scanning", "detected");
       detectionImage.removeAttribute("src");
       detectionColorImage.removeAttribute("src");
+      document.querySelector(".measurements-title").textContent =
+        "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED";
+      document.getElementById("heightUnitLabel").textContent =
+        "cm · simulated camera model";
+      document.getElementById("faceHeightName").textContent =
+        "Face height (not estimated)";
+      document.getElementById("measurementNote").textContent =
+        "Camera parameters are simulated; physical height cannot be established from the video alone.";
       detectionStatus.textContent = "Searching video for a high-confidence full-body frame…";
       for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "morphologyConfidence", "faceConfidence"]) {
         document.getElementById(id).textContent = "\u2014";
@@ -944,20 +978,11 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 "x2": box.x2 / frame_width,
                 "y2": box.y2 / frame_height,
             }
-        face = None
-        if reason is None and pose is not None:
-            if self.face_detector is None:
-                self.__class__.face_detector = FaceHeightDetector()
-            face = cast(FaceHeightDetector, self.face_detector).detect(image, pose)
-            if face is None or face.height < 12:
-                reason = "A clear front-facing face is needed for the uncalibrated demo scale."
-            elif not 120 <= pose.bounding_box.height * 20 / face.height <= 230:
-                reason = "Face-scale demo estimate is outside 120-230 cm; use a clearer upright frontal view."
         confidence_score = 0.0
         quality_score = 0.0
         relative_height = 0.0
         near_camera = False
-        if reason is None and pose is not None and face is not None:
+        if reason is None and pose is not None:
             keypoints = {point.index: point for point in pose.keypoints}
             keypoint_confidence = float(
                 np.mean(
@@ -970,9 +995,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
             confidence_product = (
                 np.clip(pose.bounding_box.confidence, 0.0, 1.0)
                 * np.clip(keypoint_confidence, 0.0, 1.0)
-                * np.clip(face.confidence, 0.0, 1.0)
             )
-            confidence_score = float(np.cbrt(confidence_product))
+            confidence_score = float(np.sqrt(confidence_product))
             box = pose.bounding_box
             relative_height = min(box.height / max(frame_height, 1), 1.0)
             head_coverage = 1 - (keypoints[0].y - box.y1) / box.height
@@ -986,6 +1010,13 @@ class _HmiHandler(BaseHTTPRequestHandler):
               * (0.8 + 0.2 * confidence_score)
             )
             near_camera = relative_height >= 0.68
+            try:
+              simulated_camera = CameraCalibration.simulated_for_image(
+                (frame_width, frame_height)
+              )
+              self._estimate_calibrated_height(simulated_camera, pose, image)
+            except CameraCalibrationError as error:
+              reason = str(error)
         return {
             "eligible": reason is None,
             "reason": reason,
@@ -1000,10 +1031,43 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "track_box": track_box,
         }
 
+    @staticmethod
+    def _estimate_calibrated_height(
+      calibration_data: object,
+      pose: PoseDetection,
+      image: np.ndarray,
+    ) -> HeightEstimate:
+      calibration = (
+        calibration_data
+        if isinstance(calibration_data, CameraCalibration)
+        else CameraCalibration.from_dict(calibration_data)
+      )
+      points = {point.index: point for point in pose.keypoints}
+      if 0 not in points or 15 not in points or 16 not in points:
+        raise CameraCalibrationError(
+          "Calibrated height needs nose and both ankle keypoints."
+        )
+      box = pose.bounding_box
+      head_pixel = ((box.x1 + box.x2) / 2, box.y1)
+      foot_pixel = (
+        (points[15].x + points[16].x) / 2,
+        box.y2,
+      )
+      frame_height, frame_width = image.shape[:2]
+      return calibration.estimate_height_cm(
+        head_pixel,
+        foot_pixel,
+        (frame_width, frame_height),
+      )
+
     def _analyze_payload(self, payload: object) -> dict:
         if not isinstance(payload, dict):
             raise TypeError("Request body must be a JSON object.")
         demo = payload.get("mode") == "video_demo"
+        calibration_data = payload.get("camera_calibration")
+        calibrated_demo = demo and calibration_data is not None
+        simulated_demo = demo and calibration_data is None
+        camera_geometry_demo = demo
         reference_cm = 20.0 if demo else payload.get("reference_length_cm")
         if not isinstance(reference_cm, (int, float)) or not 10 <= reference_cm <= 250:
             raise ValueError("Reference length must be between 10 and 250 cm.")
@@ -1022,9 +1086,6 @@ class _HmiHandler(BaseHTTPRequestHandler):
         if self.pose_estimator is None:
             self.__class__.pose_estimator = DriverPoseEstimator(Settings())
         estimator = cast(DriverPoseEstimator, self.pose_estimator)
-        if self.face_detector is None:
-            self.__class__.face_detector = FaceHeightDetector()
-        face_detector = cast(FaceHeightDetector, self.face_detector)
         analyzer = MorphologyAnalyzer(Settings().keypoint_threshold)
         pose_result: FramePoseResult = estimator.estimate(image, 0, 0.0)
         if pose_result.driver is None:
@@ -1040,55 +1101,74 @@ class _HmiHandler(BaseHTTPRequestHandler):
             )
             frontal = None
         front_pose: PoseDetection = pose_result.driver
-        face_detection = face_detector.detect(image, front_pose)
-        if demo:
-            if face_detection is None or face_detection.height < 12:
-                raise ValueError("A clear face is required for the face-scale demo estimate.")
-            marker_pixels = float(face_detection.height)
+        face_detection = None
+        if not camera_geometry_demo:
+            if self.face_detector is None:
+                self.__class__.face_detector = FaceHeightDetector()
+            face_detector = cast(FaceHeightDetector, self.face_detector)
+            face_detection = face_detector.detect(image, front_pose)
 
-        frontal_span_cm = (
-            frontal.face_to_ankle_span_px * reference_cm / marker_pixels
-            if frontal is not None
-            else None
-        )
-        shoulder_width = (
-            frontal.shoulder_width_over_span * frontal_span_cm
-            if (
-                frontal is not None
-                and frontal.shoulder_width_over_span is not None
-                and frontal_span_cm is not None
-            )
-            else None
-        )
-        hip_width = (
-            frontal.hip_width_over_span * frontal_span_cm
-            if (
-                frontal is not None
-                and frontal.hip_width_over_span is not None
-                and frontal_span_cm is not None
-            )
-            else None
-        )
-        face_height_cm = (
-            face_detection.height * reference_cm / marker_pixels
-            if face_detection is not None
-            else None
-        )
-        box_height_cm = (
-            front_pose.bounding_box.height * reference_cm / marker_pixels
-        )
-        height_cm = box_height_cm
-        if not 120 <= height_cm <= 230:
-            if demo:
-                raise ValueError(
-                    "Uncalibrated face-scale demo height is outside 120-230 cm. "
-                    "Try a clearer upright frontal view; no calibrated measurement is available."
+        camera_height_estimate = None
+        if camera_geometry_demo:
+            camera_model = (
+                CameraCalibration.from_dict(calibration_data)
+                if calibrated_demo
+                else CameraCalibration.simulated_for_image(
+                    (image.shape[1], image.shape[0])
                 )
+            )
+            camera_height_estimate = self._estimate_calibrated_height(
+            camera_model,
+                front_pose,
+                image,
+            )
+            frontal_span_cm = None
+            shoulder_width = None
+            hip_width = None
+            face_height_cm = None
+            box_height_cm = camera_height_estimate.height_cm
+            height_cm = camera_height_estimate.height_cm
+        else:
+            frontal_span_cm = (
+                frontal.face_to_ankle_span_px * reference_cm / marker_pixels
+                if frontal is not None
+                else None
+            )
+            shoulder_width = (
+                frontal.shoulder_width_over_span * frontal_span_cm
+                if (
+                    frontal is not None
+                    and frontal.shoulder_width_over_span is not None
+                    and frontal_span_cm is not None
+                )
+                else None
+            )
+            hip_width = (
+                frontal.hip_width_over_span * frontal_span_cm
+                if (
+                    frontal is not None
+                    and frontal.hip_width_over_span is not None
+                    and frontal_span_cm is not None
+                )
+                else None
+            )
+            face_height_cm = (
+                face_detection.height * reference_cm / marker_pixels
+                if face_detection is not None
+                else None
+            )
+            box_height_cm = (
+                front_pose.bounding_box.height * reference_cm / marker_pixels
+            )
+            height_cm = box_height_cm
+        if not camera_geometry_demo and not 120 <= height_cm <= 230:
             raise ValueError(
                 "Full-body detection-box height is outside 120–230 cm. Check that "
                 "the frontal image shows the entire person and the marker is "
                 "correctly calibrated."
             )
+        if camera_geometry_demo and not 80 <= height_cm <= 260:
+          raise ValueError("Camera-geometry height is outside the supported 80-260 cm range.")
         width_ratio = front_pose.bounding_box.width / max(
             front_pose.bounding_box.height, 1.0
         )
@@ -1101,35 +1181,98 @@ class _HmiHandler(BaseHTTPRequestHandler):
         box_top = max(0.0, min(float(image_height), front_pose.bounding_box.y1))
         box_right = max(box_left, min(float(image_width), front_pose.bounding_box.x2))
         box_bottom = max(box_top, min(float(image_height), front_pose.bounding_box.y2))
-        warnings = [
+        height_sensitivity_range_cm = None
+        if simulated_demo:
+          low_mount_height, high_mount_height = SIMULATED_CAMERA_HEIGHT_RANGE_M
+          image_size = (image_width, image_height)
+          low_estimate = self._estimate_calibrated_height(
+            CameraCalibration.simulated_for_image(
+              image_size, camera_height_m=low_mount_height
+            ),
+            front_pose,
+            image,
+          )
+          high_estimate = self._estimate_calibrated_height(
+            CameraCalibration.simulated_for_image(
+              image_size, camera_height_m=high_mount_height
+            ),
+            front_pose,
+            image,
+          )
+          height_sensitivity_range_cm = (
+            round(min(low_estimate.height_cm, high_estimate.height_cm), 1),
+            round(max(low_estimate.height_cm, high_estimate.height_cm), 1),
+          )
+
+        if calibrated_demo:
+          calibration = CameraCalibration.from_dict(calibration_data)
+          reprojection_error = (
+            f"{calibration.reprojection_rms_px:.3f} px"
+            if calibration.reprojection_rms_px is not None
+            else "not reported"
+          )
+          warnings = [
+            "Height uses chessboard-calibrated intrinsics and the supplied camera-to-vehicle pose.",
+            "Assumes a level ground plane at vehicle z=0 and an upright vertical body.",
+            "Head and ground-contact use the person-box top/bottom with ankle-centered ground position; box localization and mount-pose uncertainty are not included.",
+            f"Vertical-line consistency residual: {camera_height_estimate.vertical_alignment_residual_m:.3f} m.",
+            f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
+            "Shoulder/hip widths and segment lengths are unavailable from this single-view height geometry.",
+            "Build class is a rough bounding-box-width proxy and needs validation.",
+            "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+          ]
+        elif simulated_demo:
+          warnings = [
+            f"SIMULATION ONLY: intrinsics assume a {SIMULATED_HORIZONTAL_FOV_DEG:.0f} degree horizontal field of view; no chessboard calibration was measured.",
+            f"SIMULATION ONLY: extrinsics assume a level forward-facing camera at {SIMULATED_CAMERA_HEIGHT_M:.2f} m above a flat floor.",
+            f"Height sensitivity for mount height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this excludes camera pitch, roll, lens error, vehicle pitch, and pose error.",
+            "The displayed height is not a physical measurement; replace the simulated camera assumptions with measured calibration before relying on it.",
+            "Shoulder/hip widths and segment lengths are unavailable from this single-view geometry.",
+            "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+          ]
+        else:
+          warnings = [
             "Height uses the frontal full-body detection box scaled by the reference marker; the box must include the top of the head and the soles.",
             "Build class is a rough bounding-box-width proxy and needs validation.",
             "Reference and person must be upright, coplanar, and similarly distant from the camera.",
             "Torso and leg measurements are unavailable because this workflow uses one frontal image.",
             "Seat offsets remain illustrative only.",
-        ]
-        if demo:
-            warnings = [
-                "Uncalibrated demo only: detected face height is assumed to be 20 cm, not measured.",
-                "Height = person-box pixels / face-box pixels * 20 cm. All widths inherit this assumed scale.",
-                "Perspective, face shape, clothing and pose can strongly bias these estimates.",
-                "Build class is a rough bounding-box-width proxy and needs validation.",
-                "Torso and leg measurements are unavailable from this single captured frame.",
-                "Seat offsets remain illustrative only; not comfort or safety recommendations.",
-            ]
+          ]
         if frontal is None:
             warnings.append(
                 "The person bounding box was detected, but required pose landmarks "
                 "were incomplete; shoulder and hip measurements are unavailable."
             )
-        if face_detection is None:
+        if face_detection is None and not camera_geometry_demo:
             warnings.append(
-                "YuNet did not detect a face; the full-body height remains available, "
-                "but face height and face confidence are unavailable."
+                "YuNet did not detect a face; face confidence is unavailable."
             )
         return {
-            "estimation_mode": "uncalibrated_face_scale_demo" if demo else "reference_marker",
+            "estimation_mode": (
+                "calibrated_camera_geometry"
+                if calibrated_demo
+                else "simulated_camera_geometry"
+                if simulated_demo
+                else "reference_marker"
+            ),
+            "calibration_mode": (
+                "vehicle_camera"
+                if calibrated_demo
+                else "simulated_vehicle_camera"
+                if simulated_demo
+                else None
+            ),
             "height_cm": round(height_cm, 1),
+            "height_sensitivity_range_cm": (
+                list(height_sensitivity_range_cm)
+                if height_sensitivity_range_cm is not None
+                else None
+            ),
+            "height_geometry_residual_m": (
+                round(camera_height_estimate.vertical_alignment_residual_m, 4)
+                if camera_height_estimate is not None
+                else None
+            ),
             "segment_height_cm": None,
             "size_class": size_class,
             "build_category": build_category,

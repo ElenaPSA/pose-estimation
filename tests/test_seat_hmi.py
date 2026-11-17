@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
+from driver_pose_estimation.camera_calibration import CameraCalibration
 from driver_pose_estimation.face_detector import FaceBox
 from driver_pose_estimation.models import (
     BoundingBox,
@@ -41,11 +42,13 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "Seat-position visualization · visual only" not in HTML
     assert 'class="configuration-layout"' not in HTML
     assert 'id="videoFile"' in HTML
+    assert 'id="cameraCalibrationFile"' not in HTML
     assert 'accept="video/*"' in HTML
     assert 'id="sourceVideo"' in HTML
     assert 'id="decodedVideoPreview"' in HTML
     assert 'id="cancelVideo"' not in HTML
-    assert "two consecutive checks of the same person" in HTML
+    assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
+    assert "0.85m mount height" in HTML
     assert 'src="/assets/video-capture.js"' in HTML
     assert "VideoCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
@@ -71,6 +74,8 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "detectionColorImage.src = dataUrl;" in HTML
     assert "detectionColorImage.style.clipPath =" in HTML
     assert "await scanAnimation;" in HTML
+    assert "cameraCalibrationFile" not in video_source
+    assert "cameraCalibration" not in video_source
     assert HTML.count('<line id="cameraTo') == 4
     assert '<rect id="detectedPersonBox" class="person-box"/>' in HTML
     assert "<polygon" not in HTML
@@ -506,11 +511,13 @@ def test_video_tracker_ignores_initial_ineligible_detection(tmp_path) -> None:
 
 def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
-    result = video_pose()
 
     class Estimator:
+        detected_people = 1
+
         def estimate(self, image, *args):
             pose_result = video_pose()
+            pose_result.detected_people = self.detected_people
             pose_result.driver.bounding_box = BoundingBox(
                 50,
                 10,
@@ -559,10 +566,47 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert "confident" in probe
         status, analysis = post("/analyze")
         assert status == 200
-        assert analysis["height_cm"] == round(205 / 26 * 20, 1)
-        assert analysis["estimation_mode"] == "uncalibrated_face_scale_demo"
-        assert analysis["dimensions_cm"]["face_height"] == 20
-        assert "assumed to be 20 cm" in " ".join(analysis["warnings"])
+        simulated_model = CameraCalibration.simulated_for_image((200, 250))
+        expected_height = simulated_model.estimate_height_cm(
+            (100, 10), (100, 215), (200, 250)
+        ).height_cm
+        assert analysis["height_cm"] == round(expected_height, 1)
+        assert analysis["estimation_mode"] == "simulated_camera_geometry"
+        assert analysis["calibration_mode"] == "simulated_vehicle_camera"
+        assert analysis["dimensions_cm"]["face_height"] is None
+        assert analysis["height_sensitivity_range_cm"] is not None
+        assert any("SIMULATION ONLY" in warning for warning in analysis["warnings"])
+        calibration = {
+            "schema_version": 1,
+            "intrinsics": {
+                "image_size_px": [200, 250],
+                "camera_matrix": [
+                    [175, 0, 100],
+                    [0, 175, 75],
+                    [0, 0, 1],
+                ],
+                "distortion_coefficients": [0, 0, 0, 0, 0],
+                "reprojection_rms_px": 0.2,
+            },
+            "camera_to_vehicle": {
+                "position_m": [0, 0, 1.2],
+                "rotation_matrix": [
+                    [1, 0, 0],
+                    [0, 0, 1],
+                    [0, -1, 0],
+                ],
+            },
+        }
+        payload["camera_calibration"] = calibration
+        status, calibrated = post("/analyze")
+        assert status == 200
+        assert calibrated["estimation_mode"] == "calibrated_camera_geometry"
+        assert calibrated["calibration_mode"] == "vehicle_camera"
+        assert calibrated["height_cm"] == pytest.approx(175.7, abs=0.2)
+        assert calibrated["height_geometry_residual_m"] < 0.001
+        assert calibrated["dimensions_cm"]["shoulder_width"] is None
+        assert not any("assumed to be 20 cm" in warning for warning in calibrated["warnings"])
+        payload.pop("camera_calibration")
         video_path = tmp_path / "input.avi"
         writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (200, 250))
         assert writer.isOpened()
@@ -596,23 +640,23 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         for bad_face_height in (0, 10, 50):
             face.height = bad_face_height
             status, probe = post("/probe-frame")
-            assert status == 200 and not probe["eligible"]
+            assert status == 200 and probe["eligible"]
             status, analysis = post("/analyze")
-            assert status == 400
-            assert "error" in analysis
+            assert status == 200
+            assert analysis["estimation_mode"] == "simulated_camera_geometry"
         face.height = 26
-        result.detected_people = 2
+        estimator.detected_people = 2
         assert post("/probe-frame")[1]["eligible"] is False
         assert post("/analyze")[0] == 400
         connection.request("POST", "/capture-video", video_bytes, {"Content-Type": "application/octet-stream"})
         response = connection.getresponse()
         assert response.status == 400
-        assert "No suitable full-body" in json.loads(response.read())["error"]
+        assert "No confirmed full-body" in json.loads(response.read())["error"]
         connection.request("POST", "/stream-video", video_bytes, {"Content-Type": "application/octet-stream"})
         response = connection.getresponse()
         events = [json.loads(line) for line in response.read().splitlines()]
         assert events[0]["type"] == "frame"
-        assert "No suitable full-body" in events[-1]["error"]
+        assert "No confirmed full-body" in events[-1]["error"]
         assert list(tmp_path.iterdir()) == [video_path]
     finally:
         connection.close()

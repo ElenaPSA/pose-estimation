@@ -709,24 +709,63 @@ skips the animation delay. Normally only downscaled JPEG frames (longest side
 1280 px) are sent to the local server. The fallback uploads the video locally;
 neither mode saves permanent media or sends it externally.
 
-**Uncalibrated demo estimates, not physical measurements:** an ordinary video
-does not identify absolute centimetres. The selected demo approach assumes
-the detected face-box height is **20 cm**, then computes
-`height = person-box height in pixels / face-box height in pixels * 20 cm`.
-Shoulder/hip widths inherit this same assumed scale. The displayed face height
-is therefore the assumption, not an independently measured dimension.
-Frames producing heights outside 120-230 cm are rejected, not clamped.
-This heuristic can be substantially wrong due to face shape, perspective,
-camera angle and detector box quality. It is not a learned height predictor.
-Real measurements still require calibrated camera/scene geometry or a known
-reference. The legacy calibrated `/analyze` payload remains supported for API
-callers, but is no longer exposed in this automatic video UI.
-Torso/leg measurements are unavailable. Build class remains a rough
-person-box-width heuristic. Size and seat targets use the accepted demo height.
+**Simulated camera estimate, not physical measurement:** the HMI no longer
+uses the assumed 20 cm face-box scale or asks the user to load a calibration
+file. Its built-in camera model assumes a 70 degree horizontal field of view,
+an 0.85 m mount height, and a level, forward-facing camera. The mount-height
+sensitivity interval varies that assumption from 0.75 to 0.95 m; it does not
+cover camera pitch/roll, lens distortion, vehicle pitch, body lean, or landmark
+error. These defaults are a simulation, not a calibration inferred from the
+video. The HMI reports the range and labels its point estimate as simulated.
+Shoulder/hip widths and torso/leg lengths are unavailable in this single-view
+geometry. Build class remains a rough person-box-width heuristic.
 YuNet model weights and
 license are in
 `src/driver_pose_estimation/assets/`; the model comes from
 [OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
+
+## Calibrated camera height workflow (experimental)
+
+Chessboard calibration estimates the camera matrix and lens distortion. Capture
+at least eight sharp views of a rigid, measured chessboard at varied positions
+and tilts, using the same focus, zoom, resolution and image crop as the video.
+`board-columns` and `board-rows` are the number of inner corners, not the number
+of squares. `square-size-mm` must be measured, not guessed.
+
+```powershell
+driver-camera-calibrate --images "calibration/*.jpg" --board-columns 9 --board-rows 6 --square-size-mm 25 --camera-pose-json camera_pose.json --output camera_calibration.json
+```
+
+The pose JSON supplies the vehicle-mounted camera position and orientation:
+
+```json
+{
+   "position_m": [0.0, 0.0, 1.2],
+   "rotation_matrix": [
+      [1.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0],
+      [0.0, -1.0, 0.0]
+   ]
+}
+```
+
+Those numbers are illustrative only. Replace them with measured mount position
+and orientation. Vehicle axes are `x right, y forward, z up`; the rotation matrix
+maps OpenCV camera axes (`x right, y down, z forward`) into vehicle axes. The
+vehicle floor is `z=0`. The camera position must be measured relative to that
+same ground datum; orientation is required as well as position. The chessboard
+does not determine the vehicle mount pose by itself.
+
+The calibration command writes a reusable JSON artifact, but the current HMI
+does not load calibration files. Its default remains the simulated camera
+profile described above. A deployment that supplies the JSON through the
+analysis API can use calibrated head/foot rays, the vehicle ground plane, and
+the upright-body assumption. Height still depends on accurate mount pose,
+ground contact, and head/foot localization. This single-camera geometry does
+not calibrate shoulder/hip widths or remove errors from body lean, uneven
+ground, suspension pitch, or inaccurate mount measurements. Check chessboard
+reprojection RMS and validate against known-height targets; a low RMS alone
+does not validate vehicle pose or metric height.
 
 Perspective, clothing and landmark quality also affect the estimates.
 The older normalized morphology JSON capture remains available via
