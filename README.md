@@ -12,7 +12,7 @@ A Python project for detecting a driver's body pose, summarizing image-space mor
 - Offers a chessboard intrinsic-calibration utility and vehicle-pose geometry API. The HMI does not currently have a calibration-file upload control.
 - Shows illustrative seat targets in a browser simulation. It sends no vehicle commands and does not actuate a real seat.
 
-Face detection through YuNet is available in the analysis code for face/reference workflows. The default simulated-camera HMI height does not use face size as a scale reference.
+The HMI runs YuNet face detection on the selected frame and displays its detection confidence. Face size is not used as the height scale.
 
 ## Requirements
 
@@ -21,7 +21,7 @@ Face detection through YuNet is available in the analysis code for face/referenc
 - A browser for the HMI.
 - A webcam is needed only for the separate live-camera commands, not for the HMI video workflow.
 
-The project dependencies are NumPy, OpenCV, and Ultralytics. The configured pose model defaults to `yolo11n-pose.pt` in the project root; set `POSE_MODEL` if the weights are stored elsewhere.
+The project dependencies are NumPy, OpenCV, `imageio-ffmpeg` (bundled FFmpeg for local browser-preview transcoding), and Ultralytics. The configured pose model defaults to `yolo11n-pose.pt` in the project root; set `POSE_MODEL` if the weights are stored elsewhere.
 
 ## Install on Windows
 
@@ -72,9 +72,9 @@ driver-seat-hmi --port 8766
 python -m driver_pose_estimation.seat_hmi --port 8766
 ```
 
-The browser plays the uploaded video while checking frames. If the browser cannot decode its codec, the local OpenCV fallback decodes and displays sampled frames. Frame checks are sequential, capped at 240 samples; inference time can cause brief appearances between checks to be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
+The browser plays the uploaded video while checking frames. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback processes sampled frames from the original and displays them instead. Frame checks are sequential, capped at 240 samples; inference time can cause brief appearances between checks to be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
 
-The fallback temporarily stores the uploaded video in a system temporary directory and removes it when processing finishes. The HMI does not save permanent copies or send video externally. A browser decoding error can produce an aborted blob request in the developer console; the local fallback handles that case.
+The HMI temporarily stores the upload and any transcoded preview in a system temporary directory and removes them when processing finishes. It does not save permanent copies or send video externally. A browser decoding error can produce an aborted source-blob request in the developer console; the local transcode/fallback handles that case.
 
 ## Height Estimate and Camera Assumptions
 
@@ -93,7 +93,14 @@ For height, the code uses the person-box top center as the head image point and 
 
 This is a geometry simulation, **not camera calibration**. A plausible-looking number does not make the assumed camera parameters true. For example, on the checked `rotated_2.mp4` clip the simulated path selected approximately 9.08 seconds and returned about 176.5 cm, with a mount-height sensitivity interval of about 155.7-197.3 cm. Treat this as a demonstration only.
 
-The HMI does not estimate shoulder width, hip width, torso length, or leg length in this single-view camera-geometry mode. Face height is not used as a scale. Seat targets derived from the displayed height are also illustrative only.
+The HMI displays frontal shoulder width, hip width, torso length, and upper,
+lower, and total leg length in **simulated centimeters**. The analyzer first
+computes 2D ratios to the face-center-to-ankle-center pixel span, then scales
+those ratios using the simulated person-box height. These values are not
+calibrated physical dimensions and are not corrected for perspective or body
+orientation. The reported mount-height sensitivity range applies to height;
+morphology values inherit the same simulated scale. Seat targets derived from
+the simulated height are illustrative only.
 
 ## Optional Camera Calibration Tools
 
@@ -248,7 +255,7 @@ ruff check src tests
 
 - **`driver-seat-hmi` is not recognized:** activate `.venv` and install the project with `python -m pip install -e .`, or run `python -m driver_pose_estimation.seat_hmi`.
 - **Port 8765 is already in use:** start with `driver-seat-hmi --port 8766` and open the printed URL.
-- **HMI cannot decode the video in-browser:** the application attempts its local OpenCV fallback. Use a valid video file below 500 MB.
+- **HMI cannot decode the video in-browser:** it first attempts a local H.264/MP4 transcode with bundled FFmpeg; if that is unavailable, it displays sampled frames. Use a valid video file below 500 MB.
 - **`driver-pose` cannot open a camera:** check `CAMERA_INDEX` and confirm Windows camera access is allowed. This does not affect HMI video-file uploads.
 - **Model weights cannot be found:** run from the project root or set `POSE_MODEL` to the weights path.
 - **A calibrated height is needed:** collect same-camera chessboard views and measure the camera mount pose relative to the vehicle floor. The simulated HMI result is not a substitute.

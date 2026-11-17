@@ -45,6 +45,7 @@ const VideoCapture = (() => {
   }
   function mount({captured, reset}) {
     const input = document.getElementById("videoFile");
+    const fileStatus = document.getElementById("videoFileStatus");
     const video = document.getElementById("sourceVideo");
     const canvas = document.createElement("canvas");
     const status = document.getElementById("profileStatus");
@@ -57,6 +58,7 @@ const VideoCapture = (() => {
     input.addEventListener("change", async () => {
       const file = input.files[0];
       if (!file) return;
+      fileStatus.textContent = `Selected video: ${file.name}`;
       controller = new AbortController();
       const {signal} = controller;
       input.disabled = true;
@@ -75,57 +77,80 @@ const VideoCapture = (() => {
           await waitFor(video, "loadeddata", () => { video.src = url; video.load(); }, signal);
         } catch (error) {
           if (signal.aborted) throw error;
-          status.textContent = "Browser cannot play this codec. Starting local decoded preview…";
-          video.hidden = true;
-          preview.hidden = false;
-          const response = await fetch("/stream-video", {
-            method: "POST",
-            signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
-            headers: {"Content-Type": "application/octet-stream"},
-            body: file
-          });
-          if (!response.ok) {
-            const result = await response.json();
-            throw new Error(result.error || "Local video playback failed.");
-          }
-          if (!response.body) throw new Error("Streaming video preview is unavailable.");
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          const consume = async line => {
-            if (!line.trim()) return false;
-            const event = JSON.parse(line);
-            signal.throwIfAborted();
-            if (event.error) throw new Error(event.error);
-            if (event.type === "frame") {
-              preview.src = event.image;
-              status.textContent = `Local decoded preview (sampled): ${event.timestamp.toFixed(2)} s. Checking full-body visibility…`;
-              await new Promise(resolve => setTimeout(resolve, 500));
-              signal.throwIfAborted();
-            } else if (event.type === "captured") {
-              preview.src = event.image;
-              await captured(event.image, event.timestamp, signal);
-              return true;
-            }
-            return false;
-          };
           try {
-            while (true) {
-              const {value, done} = await reader.read();
-              buffer += decoder.decode(value, {stream: !done});
-              let end;
-              while ((end = buffer.indexOf("\n")) >= 0) {
-                const line = buffer.slice(0, end);
-                buffer = buffer.slice(end + 1);
-                if (await consume(line)) return;
-              }
-              if (done) {
-                if (await consume(buffer)) return;
-                throw new Error("Video preview ended without a confirmed full-body frame.");
-              }
+            status.textContent = "Converting the local video to browser-compatible WebM…";
+            const response = await fetch("/transcode-video", {
+              method: "POST",
+              signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
+              headers: {"Content-Type": "application/octet-stream"},
+              body: file
+            });
+            if (!response.ok) {
+              const result = await response.json();
+              throw new Error(result.error || "Browser-compatible transcode failed.");
             }
-          } finally {
-            await reader.cancel();
+            const previewUrl = URL.createObjectURL(await response.blob());
+            await waitFor(video, "loadeddata", () => {
+              video.src = previewUrl;
+              video.load();
+            }, signal);
+            if (url) URL.revokeObjectURL(url);
+            url = previewUrl;
+            status.textContent = "Playing converted local video while checking the full body…";
+          } catch (transcodeError) {
+            if (signal.aborted) throw transcodeError;
+            status.textContent = "Browser transcode unavailable. Starting sampled local preview…";
+            video.hidden = true;
+            preview.hidden = false;
+            const streamResponse = await fetch("/stream-video", {
+              method: "POST",
+              signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
+              headers: {"Content-Type": "application/octet-stream"},
+              body: file
+            });
+            if (!streamResponse.ok) {
+              const result = await streamResponse.json();
+              throw new Error(result.error || "Local video preview failed.");
+            }
+            if (!streamResponse.body) throw new Error("Streaming video preview is unavailable.");
+            const reader = streamResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            const consume = async line => {
+              if (!line.trim()) return false;
+              const event = JSON.parse(line);
+              signal.throwIfAborted();
+              if (event.error) throw new Error(event.error);
+              if (event.type === "frame") {
+                preview.src = event.image;
+                status.textContent = `Local decoded preview (sampled frames): ${event.timestamp.toFixed(2)} s. Checking full-body visibility…`;
+                await new Promise(resolve => setTimeout(resolve, 500));
+                signal.throwIfAborted();
+              } else if (event.type === "captured") {
+                preview.src = event.image;
+                await captured(event.image, event.timestamp, signal);
+                return true;
+              }
+              return false;
+            };
+            try {
+              while (true) {
+                const {value, done} = await reader.read();
+                buffer += decoder.decode(value, {stream: !done});
+                let end;
+                while ((end = buffer.indexOf("\n")) >= 0) {
+                  const line = buffer.slice(0, end);
+                  buffer = buffer.slice(end + 1);
+                  if (await consume(line)) return;
+                }
+                if (done) {
+                  if (await consume(buffer)) return;
+                  throw new Error("Video preview ended without a confirmed full-body frame.");
+                }
+              }
+            } finally {
+              await reader.cancel();
+            }
           }
         }
         video.hidden = false;

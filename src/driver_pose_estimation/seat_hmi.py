@@ -5,6 +5,7 @@ import base64
 import binascii
 import json
 import logging
+import subprocess
 import tempfile
 import webbrowser
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 import cv2
+import imageio_ffmpeg
 import numpy as np
 
 from .camera_calibration import (
@@ -281,7 +283,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         <div class="upload-view">
           <label for="videoFile">Driver video</label>
           <input id="videoFile" type="file" accept="video/*">
-          <video id="sourceVideo" hidden muted playsinline preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
+          <div id="videoFileStatus" class="upload-status">No video selected.</div>
+          <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
           <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;max-height:300px;object-fit:contain">
           <small>A complete near-camera frame is accepted after two consecutive checks of the same person. If no close, complete frame is found, the best stable full-body frame is scanned at the end.</small>
         </div>
@@ -341,11 +344,13 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         <div class="result-title measurements-title">SIMULATED CAMERA ESTIMATE · NOT CALIBRATED</div>
         <div class="parameters">
           <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Estimated height</span><span class="param-value"><span id="measureHeight">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Shoulder width</span><span class="param-value"><span id="measureShoulder">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Hip width</span><span class="param-value"><span id="measureHip">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name" id="faceHeightName">Face height (not estimated)</span><span class="param-value"><span id="measureFace">—</span><small>cm · not measured</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Torso length</span><span class="param-value"><span id="measureTorso">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Leg length</span><span class="param-value"><span id="measureLegs">—</span><small>cm · upper + lower leg</small></span></div>
+          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Shoulder width</span><span class="param-value"><span id="measureShoulder">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Hip width</span><span class="param-value"><span id="measureHip">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name">Face-to-ankle span</span><span class="param-value"><span id="measureFace">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Torso length</span><span class="param-value"><span id="measureTorso">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Total leg length</span><span class="param-value"><span id="measureLegs">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Upper leg length</span><span class="param-value"><span id="measureUpperLeg">—</span><small>cm · simulated</small></span></div>
+          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Lower leg length</span><span class="param-value"><span id="measureLowerLeg">—</span><small>cm · simulated</small></span></div>
         </div>
         <div id="measurementNote" class="under-cta">Camera parameters are simulated; physical height cannot be established from the video alone.</div>
       </div>
@@ -573,19 +578,25 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         : simulated
           ? "cm · simulated camera model"
           : "cm · reference marker";
-      document.getElementById("faceHeightName").textContent = calibrated || simulated
-        ? "Face height (not estimated)"
-        : "Face height";
       selectSize(result.size_class, false);
       selectBuild(result.build_category);
       render();
-      const dims = result.dimensions_cm;
+      const morphology = result.morphology_dimensions_cm;
       document.getElementById("measureHeight").textContent = h.toFixed(1);
-      document.getElementById("measureShoulder").textContent = fmtCm(dims.shoulder_width);
-      document.getElementById("measureHip").textContent = fmtCm(dims.hip_width);
-      document.getElementById("measureFace").textContent = fmtCm(dims.face_height);
-      document.getElementById("measureTorso").textContent = fmtCm(dims.torso);
-      document.getElementById("measureLegs").textContent = fmtCm(dims.lower_body);
+      document.getElementById("measureShoulder").textContent =
+        fmtCm(morphology?.shoulder_width);
+      document.getElementById("measureHip").textContent =
+        fmtCm(morphology?.hip_width);
+      document.getElementById("measureFace").textContent =
+        fmtCm(result.morphology_reference_span_cm);
+      document.getElementById("measureTorso").textContent =
+        fmtCm(morphology?.torso_length);
+      document.getElementById("measureLegs").textContent =
+        fmtCm(morphology?.total_leg_length);
+      document.getElementById("measureUpperLeg").textContent =
+        fmtCm(morphology?.upper_leg_length);
+      document.getElementById("measureLowerLeg").textContent =
+        fmtCm(morphology?.lower_leg_length);
       document.getElementById("morphologyConfidence").textContent =
         `${(result.confidence * 100).toFixed(0)}%`;
       document.getElementById("faceConfidence").textContent =
@@ -614,12 +625,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED";
       document.getElementById("heightUnitLabel").textContent =
         "cm · simulated camera model";
-      document.getElementById("faceHeightName").textContent =
-        "Face height (not estimated)";
       document.getElementById("measurementNote").textContent =
         "Camera parameters are simulated; physical height cannot be established from the video alone.";
       detectionStatus.textContent = "Searching video for a high-confidence full-body frame…";
-      for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "morphologyConfidence", "faceConfidence"]) {
+      for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "measureUpperLeg", "measureLowerLeg", "morphologyConfidence", "faceConfidence"]) {
         document.getElementById(id).textContent = "\u2014";
       }
     }
@@ -689,7 +698,13 @@ class _HmiHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
-        if self.path not in ("/analyze", "/probe-frame", "/capture-video", "/stream-video"):
+        if self.path not in (
+            "/analyze",
+            "/probe-frame",
+            "/capture-video",
+            "/stream-video",
+            "/transcode-video",
+        ):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         try:
@@ -697,7 +712,11 @@ class _HmiHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length."})
             return
-        video_upload = self.path in ("/capture-video", "/stream-video")
+        video_upload = self.path in (
+            "/capture-video",
+            "/stream-video",
+            "/transcode-video",
+        )
         request_limit = 500 * 1024 * 1024 if video_upload else MAX_REQUEST_BYTES
         if content_length <= 0 or content_length > request_limit:
             self._send_json(
@@ -713,6 +732,20 @@ class _HmiHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/stream-video":
             self._stream_video(content_length)
+            return
+        if self.path == "/transcode-video":
+            try:
+                self._transcode_video(content_length)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                logger.info("Transcoded video preview client disconnected")
+            except (ValueError, TypeError) as error:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except Exception:
+                logger.exception("Local browser-compatible transcode failed")
+                self._send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "Could not transcode this video for browser playback."},
+                )
             return
         try:
             if video_upload:
@@ -740,6 +773,90 @@ class _HmiHandler(BaseHTTPRequestHandler):
             )
             return
         self._send_json(HTTPStatus.OK, result)
+
+    def _transcode_video(self, content_length: int) -> None:
+        with tempfile.TemporaryDirectory(prefix="seat-preview-") as directory:
+            source_path = Path(directory) / "source.video"
+            output_path = Path(directory) / "preview.mp4"
+            remaining = content_length
+            with source_path.open("wb") as stream:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("Video upload was interrupted during transcode.")
+                    stream.write(chunk)
+                    remaining -= len(chunk)
+
+            capture = cv2.VideoCapture(str(source_path))
+            try:
+                if not capture.isOpened():
+                    raise ValueError("Cannot decode this video for browser playback.")
+                source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if source_width < 1 or source_height < 1:
+                    raise ValueError("Video contains no decodable frames.")
+                scale = min(1.0, 640 / max(source_height, source_width))
+                output_width = max(
+                    2,
+                    round(source_width * scale) - round(source_width * scale) % 2,
+                )
+                output_height = max(
+                    2,
+                    round(source_height * scale) - round(source_height * scale) % 2,
+                )
+            finally:
+                capture.release()
+
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            command = [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source_path),
+                "-vf",
+                f"scale={output_width}:{output_height},fps=12",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+            try:
+                subprocess.run(
+                    command,
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                    timeout=600,
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                details = getattr(error, "stderr", "")
+                raise ValueError(
+                    "Could not convert video to browser-compatible H.264: "
+                    f"{str(details or error)[:500]}"
+                ) from error
+
+            if not output_path.is_file() or output_path.stat().st_size == 0:
+                raise ValueError("Video transcoding produced no playable frames.")
+            output_size_bytes = output_path.stat().st_size
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(output_size_bytes))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with output_path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    self.wfile.write(chunk)
 
     def _stream_video(self, content_length: int) -> None:
         self.send_response(HTTPStatus.OK)
@@ -1102,11 +1219,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
             frontal = None
         front_pose: PoseDetection = pose_result.driver
         face_detection = None
-        if not camera_geometry_demo:
-            if self.face_detector is None:
-                self.__class__.face_detector = FaceHeightDetector()
-            face_detector = cast(FaceHeightDetector, self.face_detector)
-            face_detection = face_detector.detect(image, front_pose)
+        if self.face_detector is None:
+          self.__class__.face_detector = FaceHeightDetector()
+        face_detector = cast(FaceHeightDetector, self.face_detector)
+        face_detection = face_detector.detect(image, front_pose)
 
         camera_height_estimate = None
         if camera_geometry_demo:
@@ -1181,7 +1297,28 @@ class _HmiHandler(BaseHTTPRequestHandler):
         box_top = max(0.0, min(float(image_height), front_pose.bounding_box.y1))
         box_right = max(box_left, min(float(image_width), front_pose.bounding_box.x2))
         box_bottom = max(box_top, min(float(image_height), front_pose.bounding_box.y2))
+        morphology_proportions = None
+        if frontal is not None:
+          upper_leg_ratio = frontal.upper_leg_length_over_span
+          lower_leg_ratio = frontal.lower_leg_length_over_span
+          morphology_proportions = {
+            "view": "frontal",
+            "reference_span_px": frontal.face_to_ankle_span_px,
+            "reference_span": "face-center to ankle-center image distance",
+            "shoulder_width_over_span": frontal.shoulder_width_over_span,
+            "hip_width_over_span": frontal.hip_width_over_span,
+            "torso_length_over_span": frontal.torso_length_over_span,
+            "upper_leg_length_over_span": upper_leg_ratio,
+            "lower_leg_length_over_span": lower_leg_ratio,
+            "total_leg_length_over_span": (
+              round(upper_leg_ratio + lower_leg_ratio, 4)
+              if upper_leg_ratio is not None and lower_leg_ratio is not None
+              else None
+            ),
+            "keypoint_confidence": frontal.keypoint_confidence,
+          }
         height_sensitivity_range_cm = None
+        sensitivity_heights_cm = None
         if simulated_demo:
           low_mount_height, high_mount_height = SIMULATED_CAMERA_HEIGHT_RANGE_M
           image_size = (image_width, image_height)
@@ -1203,6 +1340,53 @@ class _HmiHandler(BaseHTTPRequestHandler):
             round(min(low_estimate.height_cm, high_estimate.height_cm), 1),
             round(max(low_estimate.height_cm, high_estimate.height_cm), 1),
           )
+          sensitivity_heights_cm = (
+            low_estimate.height_cm,
+            high_estimate.height_cm,
+          )
+
+        morphology_dimensions_cm = None
+        morphology_dimension_sensitivity_cm = None
+        morphology_reference_span_cm = None
+        if morphology_proportions is not None:
+          box_height_px = max(front_pose.bounding_box.height, 1.0)
+          span_px = morphology_proportions["reference_span_px"]
+          morphology_reference_span_cm = span_px * height_cm / box_height_px
+          ratio_fields = {
+            "shoulder_width": "shoulder_width_over_span",
+            "hip_width": "hip_width_over_span",
+            "torso_length": "torso_length_over_span",
+            "upper_leg_length": "upper_leg_length_over_span",
+            "lower_leg_length": "lower_leg_length_over_span",
+            "total_leg_length": "total_leg_length_over_span",
+          }
+          morphology_dimensions_cm = {
+            name: self._round_optional(
+              ratio * morphology_reference_span_cm
+              if ratio is not None
+              else None
+            )
+            for name, ratio_key in ratio_fields.items()
+            for ratio in (morphology_proportions[ratio_key],)
+          }
+          if sensitivity_heights_cm is not None:
+            morphology_dimension_sensitivity_cm = {}
+            for name, ratio_key in ratio_fields.items():
+              ratio = morphology_proportions[ratio_key]
+              if ratio is None:
+                morphology_dimension_sensitivity_cm[name] = None
+                continue
+              values = [
+                ratio * span_px * estimate / box_height_px
+                for estimate in sensitivity_heights_cm
+              ]
+              morphology_dimension_sensitivity_cm[name] = [
+                round(min(values), 1),
+                round(max(values), 1),
+              ]
+          if camera_geometry_demo:
+            shoulder_width = morphology_dimensions_cm["shoulder_width"]
+            hip_width = morphology_dimensions_cm["hip_width"]
 
         if calibrated_demo:
           calibration = CameraCalibration.from_dict(calibration_data)
@@ -1217,7 +1401,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "Head and ground-contact use the person-box top/bottom with ankle-centered ground position; box localization and mount-pose uncertainty are not included.",
             f"Vertical-line consistency residual: {camera_height_estimate.vertical_alignment_residual_m:.3f} m.",
             f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
-            "Shoulder/hip widths and segment lengths are unavailable from this single-view height geometry.",
+                "Morphology centimeters are image-space proportions scaled by the estimated person-box height; they are not independent 3D segment measurements.",
             "Build class is a rough bounding-box-width proxy and needs validation.",
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]
@@ -1227,7 +1411,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             f"SIMULATION ONLY: extrinsics assume a level forward-facing camera at {SIMULATED_CAMERA_HEIGHT_M:.2f} m above a flat floor.",
             f"Height sensitivity for mount height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this excludes camera pitch, roll, lens error, vehicle pitch, and pose error.",
             "The displayed height is not a physical measurement; replace the simulated camera assumptions with measured calibration before relying on it.",
-            "Shoulder/hip widths and segment lengths are unavailable from this single-view geometry.",
+            "Morphology centimeters are image-space proportions scaled by the simulated person-box height; they are not calibrated physical dimensions.",
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]
         else:
@@ -1273,6 +1457,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 if camera_height_estimate is not None
                 else None
             ),
+            "morphology_proportions": morphology_proportions,
+            "morphology_reference_span_cm": (
+              self._round_optional(morphology_reference_span_cm)
+            ),
+            "morphology_dimensions_cm": morphology_dimensions_cm,
+            "morphology_dimension_sensitivity_cm": morphology_dimension_sensitivity_cm,
             "segment_height_cm": None,
             "size_class": size_class,
             "build_category": build_category,

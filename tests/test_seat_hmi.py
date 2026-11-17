@@ -42,7 +42,9 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "Seat-position visualization · visual only" not in HTML
     assert 'class="configuration-layout"' not in HTML
     assert 'id="videoFile"' in HTML
+    assert 'id="videoFileStatus"' in HTML
     assert 'id="cameraCalibrationFile"' not in HTML
+    assert 'id="sourceVideo" hidden muted playsinline controls' in HTML
     assert 'accept="video/*"' in HTML
     assert 'id="sourceVideo"' in HTML
     assert 'id="decodedVideoPreview"' in HTML
@@ -81,8 +83,8 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert "<polygon" not in HTML
     assert ".detection-viewport.detected .detection-overlay { animation: camera-highlight" in HTML
     assert 'mode: "video_demo"' in HTML
-    assert "assumes a 20 cm detected face height" in HTML
-    assert "APPROXIMATE DRIVER DEMO ESTIMATES" in HTML
+    assert "simulated camera model" in HTML
+    assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
     assert "MODEL PERFORMANCE" in HTML
     assert 'id="morphologyConfidence"' in HTML
     assert 'id="faceConfidence"' in HTML
@@ -95,15 +97,18 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'id="measureLegs"' in HTML
     assert 'id="measureUpperBody"' not in HTML
     assert 'id="measureLowerBody"' not in HTML
-    assert 'id="measureUpperLeg"' not in HTML
-    assert 'id="measureLowerLeg"' not in HTML
-    assert '<span class="number">' not in HTML
-    assert "SEGMENT PROPORTIONS" not in HTML
-    assert 'id="legs"' not in HTML
+    assert 'id="measureUpperLeg"' in HTML
+    assert 'id="measureLowerLeg"' in HTML
+    assert "Shoulder width</span>" in HTML
+    assert "Hip width</span>" in HTML
+    assert "Torso length</span>" in HTML
+    assert "Upper leg length</span>" in HTML
+    assert "Lower leg length</span>" in HTML
+    assert "cm · simulated" in HTML
     assert 'id="torso"' not in HTML
     assert "proportionWord" not in HTML
     assert HTML.index("LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("DRIVER DIMENSIONS")
-    assert HTML.index("APPROXIMATE DRIVER DEMO ESTIMATES") < HTML.index('id="seatStudio"')
+    assert HTML.index("SIMULATED CAMERA ESTIMATE · NOT CALIBRATED") < HTML.index('id="seatStudio"')
 
 
 def test_hmi_serves_dashboard_locally() -> None:
@@ -137,6 +142,9 @@ def test_hmi_serves_dashboard_locally() -> None:
         video_source = video_response.read().decode()
         assert 'fetch("/probe-frame"' in video_source
         assert 'fetch("/stream-video"' in video_source
+        assert 'fetch("/transcode-video"' in video_source
+        assert 'Playing converted local video' in video_source
+        assert "Selected video: ${file.name}" in video_source
         assert "await video.play();" in video_source
         assert "confirmations >= 2 && observation.nearCamera" in video_source
         assert "confirmations >= 3" in video_source
@@ -409,6 +417,55 @@ def test_hmi_rejects_bad_image_upload_without_initializing_model(monkeypatch) ->
         thread.join(timeout=2)
 
 
+def test_video_transcode_endpoint_returns_playable_h264_mp4(tmp_path) -> None:
+    source_path = tmp_path / "source.avi"
+    writer = cv2.VideoWriter(
+        str(source_path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (160, 120)
+    )
+    if not writer.isOpened():
+        pytest.skip("MJPG test video writer is unavailable")
+    try:
+        for frame_index in range(10):
+            writer.write(
+                np.full((120, 160, 3), frame_index * 20, dtype=np.uint8)
+            )
+    finally:
+        writer.release()
+
+    video_bytes = source_path.read_bytes()
+    server = HTTPServer(("127.0.0.1", 0), _HmiHandler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+    try:
+        connection.request(
+            "POST",
+            "/transcode-video",
+            video_bytes,
+            {"Content-Type": "application/octet-stream"},
+        )
+        response = connection.getresponse()
+        body = response.read()
+        if response.status != 200:
+            pytest.skip(f"Bundled FFmpeg H.264 encoder unavailable: {body[:200]!r}")
+        assert response.getheader("Content-Type") == "video/mp4"
+
+        preview_path = tmp_path / "preview.mp4"
+        preview_path.write_bytes(body)
+        preview = cv2.VideoCapture(str(preview_path))
+        try:
+            success, frame = preview.read()
+            assert preview.isOpened() and success
+            assert frame.shape[:2] == (120, 160)
+        finally:
+            preview.release()
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def video_pose() -> FramePoseResult:
     coords = {
         0: (100, 25), 5: (80, 60), 6: (120, 60),
@@ -570,12 +627,46 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         expected_height = simulated_model.estimate_height_cm(
             (100, 10), (100, 215), (200, 250)
         ).height_cm
+        expected_span_cm = 176 * expected_height / 205
         assert analysis["height_cm"] == round(expected_height, 1)
         assert analysis["estimation_mode"] == "simulated_camera_geometry"
         assert analysis["calibration_mode"] == "simulated_vehicle_camera"
-        assert analysis["dimensions_cm"]["face_height"] is None
+        assert analysis["face_detection_confidence"] == pytest.approx(.9)
+        assert analysis["morphology_reference_span_cm"] == pytest.approx(
+            expected_span_cm, abs=.1
+        )
+        centimeter_morphology = analysis["morphology_dimensions_cm"]
+        assert centimeter_morphology["shoulder_width"] == pytest.approx(
+            .2273 * expected_span_cm, abs=.1
+        )
+        assert centimeter_morphology["hip_width"] == pytest.approx(
+            .1705 * expected_span_cm, abs=.1
+        )
+        assert centimeter_morphology["torso_length"] == pytest.approx(
+            .2557 * expected_span_cm, abs=.1
+        )
         assert analysis["height_sensitivity_range_cm"] is not None
         assert any("SIMULATION ONLY" in warning for warning in analysis["warnings"])
+        assert analysis["face_detection_confidence"] == pytest.approx(.9)
+        morphology = analysis["morphology_proportions"]
+        assert morphology["reference_span_px"] == pytest.approx(176.0)
+        assert morphology["shoulder_width_over_span"] == pytest.approx(0.2273)
+        assert morphology["hip_width_over_span"] == pytest.approx(0.1705)
+        assert morphology["torso_length_over_span"] == pytest.approx(0.2557)
+        assert morphology["upper_leg_length_over_span"] == pytest.approx(0.2557)
+        assert morphology["lower_leg_length_over_span"] == pytest.approx(0.3125)
+        assert morphology["total_leg_length_over_span"] == pytest.approx(0.5682)
+        morphology_cm = analysis["morphology_dimensions_cm"]
+        reference_span_cm = analysis["morphology_reference_span_cm"]
+        assert morphology_cm["shoulder_width"] == pytest.approx(
+            morphology["shoulder_width_over_span"] * reference_span_cm
+        )
+        assert morphology_cm["hip_width"] == pytest.approx(
+            morphology["hip_width_over_span"] * reference_span_cm
+        )
+        assert morphology_cm["total_leg_length"] == pytest.approx(
+            morphology["total_leg_length_over_span"] * reference_span_cm
+        )
         calibration = {
             "schema_version": 1,
             "intrinsics": {
