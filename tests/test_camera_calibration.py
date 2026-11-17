@@ -7,6 +7,7 @@ import pytest
 from driver_pose_estimation.camera_calibration import (
     CameraCalibration,
     CameraCalibrationError,
+    IMPLIED_DIAGONAL_FOV_DEG,
     calibrate_chessboard,
 )
 
@@ -59,6 +60,27 @@ def test_metric_height_requires_vehicle_mount_pose() -> None:
 
     with pytest.raises(CameraCalibrationError, match="requires camera_to_vehicle"):
         calibration.estimate_height_cm((320, 150), (320, 440), (640, 480))
+
+
+def test_reported_mirror_camera_fov_builds_axis_specific_intrinsics() -> None:
+    calibration = CameraCalibration.simulated_for_image((2048, 1280))
+    intrinsics = calibration.to_dict()["intrinsics"]
+
+    assert calibration.camera_matrix[0, 0] == pytest.approx(886.7038, abs=0.01)
+    assert calibration.camera_matrix[1, 1] == pytest.approx(1361.9197, abs=0.01)
+    assert intrinsics["image_size_px"] == [2048, 1280]
+    assert intrinsics["horizontal_fov_deg"] == 98.22
+    assert intrinsics["vertical_fov_deg"] == 50.34
+    assert intrinsics["reported_diagonal_fov_deg"] == 113.83
+    assert IMPLIED_DIAGONAL_FOV_DEG == pytest.approx(102.54, abs=0.01)
+
+
+def test_incompatible_aspect_ratio_uses_generic_simulation() -> None:
+    calibration = CameraCalibration.simulated_for_image((1080, 1920))
+
+    assert calibration.horizontal_fov_deg == 70.0
+    assert calibration.reported_diagonal_fov_deg is None
+    assert calibration.camera_matrix[0, 0] == pytest.approx(calibration.camera_matrix[1, 1])
 
 
 def test_mount_rotation_must_be_a_proper_rotation() -> None:

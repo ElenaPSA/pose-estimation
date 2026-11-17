@@ -50,7 +50,9 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'id="decodedVideoPreview"' in HTML
     assert 'id="cancelVideo"' not in HTML
     assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
-    assert "0.85m mount height" in HTML
+    assert "2048 × 1280 camera specs" in HTML
+    assert "98.22° horizontal, 50.34° vertical" in HTML
+    assert "0.85m level, forward-facing pose is only a placeholder" in HTML
     assert 'src="/assets/video-capture.js"' in HTML
     assert "VideoCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
@@ -647,6 +649,8 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         )
         assert analysis["height_sensitivity_range_cm"] is not None
         assert any("SIMULATION ONLY" in warning for warning in analysis["warnings"])
+        assert any("does not match the specified" in warning for warning in analysis["warnings"])
+        assert any("external-mirror position and orientation are unknown" in warning for warning in analysis["warnings"])
         assert analysis["face_detection_confidence"] == pytest.approx(.9)
         morphology = analysis["morphology_proportions"]
         assert morphology["reference_span_px"] == pytest.approx(176.0)

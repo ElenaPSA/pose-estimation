@@ -19,12 +19,16 @@ import imageio_ffmpeg
 import numpy as np
 
 from .camera_calibration import (
+  CAMERA_IMAGE_SIZE_PX,
   CameraCalibration,
   CameraCalibrationError,
   HeightEstimate,
   SIMULATED_CAMERA_HEIGHT_M,
   SIMULATED_CAMERA_HEIGHT_RANGE_M,
+  IMPLIED_DIAGONAL_FOV_DEG,
+  REPORTED_DIAGONAL_FOV_DEG,
   SIMULATED_HORIZONTAL_FOV_DEG,
+  SIMULATED_VERTICAL_FOV_DEG,
 )
 from .config import Settings
 from .face_detector import FaceHeightDetector
@@ -312,7 +316,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         </div>
       </div>
       <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-      <p class="under-cta">Height uses a simulated camera model: nominal 70° field of view, 0.85m mount height, level and forward-facing. These values are assumptions, not measured calibration. No vehicle commands.</p>
+      <p class="under-cta">Matching video uses the reported 2048 × 1280 camera specs (98.22° horizontal, 50.34° vertical); other aspect ratios use a generic simulation. Mirror position, orientation and lens distortion are not calibrated; the 0.85m level, forward-facing pose is only a placeholder. No vehicle commands.</p>
     </div>
     <section class="left">
       <div class="card">
@@ -1406,11 +1410,19 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]
         elif simulated_demo:
-          warnings = [
-            f"SIMULATION ONLY: intrinsics assume a {SIMULATED_HORIZONTAL_FOV_DEG:.0f} degree horizontal field of view; no chessboard calibration was measured.",
-            f"SIMULATION ONLY: extrinsics assume a level forward-facing camera at {SIMULATED_CAMERA_HEIGHT_M:.2f} m above a flat floor.",
-            f"Height sensitivity for mount height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this excludes camera pitch, roll, lens error, vehicle pitch, and pose error.",
-            "The displayed height is not a physical measurement; replace the simulated camera assumptions with measured calibration before relying on it.",
+          if camera_model.reported_diagonal_fov_deg is not None:
+            intrinsics_warnings = [
+            f"SPEC-BASED INTRINSICS, NOT CALIBRATED: {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} pixels, {SIMULATED_HORIZONTAL_FOV_DEG:.2f} degree horizontal and {SIMULATED_VERTICAL_FOV_DEG:.2f} degree vertical FOV; lens distortion is assumed zero.",
+            f"FOV SPECIFICATION MISMATCH: reported diagonal is {REPORTED_DIAGONAL_FOV_DEG:.2f} degrees, but horizontal and vertical FOV imply {IMPLIED_DIAGONAL_FOV_DEG:.2f} degrees for a rectilinear camera.",
+            ]
+          else:
+            intrinsics_warnings = [
+              f"SIMULATION ONLY: frame aspect ratio {image_width}x{image_height} does not match the specified {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} camera. Rotation or cropping is unknown, so a generic 70 degree horizontal FOV is used instead of the mirror-camera specs.",
+            ]
+          warnings = intrinsics_warnings + [
+            f"SIMULATION ONLY: external-mirror position and orientation are unknown; geometry still assumes a level forward-facing camera at {SIMULATED_CAMERA_HEIGHT_M:.2f} m above a flat floor.",
+            f"Height sensitivity for assumed mount height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm; this excludes mount pose, FOV inconsistency, lens distortion, vehicle pitch, and pose error.",
+            "The displayed height is not a physical measurement. Measure the camera-to-vehicle pose and calibrate lens distortion before relying on metric height.",
             "Morphology centimeters are image-space proportions scaled by the simulated person-box height; they are not calibrated physical dimensions.",
             "Seat offsets remain illustrative only; not comfort or safety recommendations.",
           ]

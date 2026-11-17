@@ -2,7 +2,7 @@
 
 A Python project for detecting a driver's body pose, summarizing image-space morphology, and previewing illustrative seat adjustments. The primary browser workflow accepts a **local video file**; it does not use a webcam.
 
-> **Height is not calibrated by default.** The HMI uses an explicitly simulated camera model (70-degree horizontal field of view, 0.85 m mount height, level and forward-facing, zero lens distortion). Those values are assumptions, not measurements. The displayed height and sensitivity interval are not physical measurements.
+> **Height is not calibrated by default.** For matching image geometry, the HMI uses the supplied camera resolution and horizontal/vertical FOV to estimate pinhole intrinsics; otherwise it falls back to a generic model. The external-mirror camera position, orientation, and lens distortion are not calibrated. The HMI still uses a placeholder level, forward-facing pose at 0.85 m above ground; displayed height is not a physical measurement.
 
 ## What the Project Does
 
@@ -78,20 +78,27 @@ The HMI temporarily stores the upload and any transcoded preview in a system tem
 
 ## Height Estimate and Camera Assumptions
 
-With no measured intrinsics or mount pose, the HMI creates a simulated camera model:
+For frames matching the specified camera aspect ratio, the HMI uses the supplied specifications to form a pinhole camera matrix. These are reported specifications, not a chessboard calibration:
 
 | Parameter | Default assumption |
 |---|---:|
-| Horizontal field of view | 70 degrees |
-| Camera height above flat ground | 0.85 m |
-| Mount orientation | Level, facing forward |
-| Lens distortion | Zero |
+| Native resolution | 2048 × 1280 px |
+| Horizontal field of view | 98.22 degrees |
+| Vertical field of view | 50.34 degrees |
+| Reported diagonal field of view | 113.83 degrees |
+| Derived focal lengths | `fx ≈ 886.70 px`, `fy ≈ 1361.92 px` |
+| Lens distortion | Assumed zero, not measured |
+| Mirror camera position and orientation | Unknown; placeholder assumes level, facing forward at 0.85 m |
 | Ground plane | Vehicle `z = 0` |
 | Sensitivity interval | 0.75-0.95 m camera height |
 
+The supplied FOVs are internally inconsistent for a rectilinear camera at this resolution: horizontal and vertical FOV imply a diagonal FOV of about 102.54 degrees, not the reported 113.83 degrees. The HMI retains the diagonal value as reported metadata and warns about the discrepancy; it does not use it to create a camera matrix. The supplied profile is applied only to frames with the same aspect ratio, assuming a full-frame resize and no crop or rotation. For other aspect ratios, including portrait video, the HMI falls back to the original generic 70-degree horizontal-FOV simulation and reports that the camera profile was not applied. Aspect ratio alone cannot verify matching camera settings or crop. A chessboard calibration should replace these approximate intrinsics and measure lens distortion.
+
 For height, the code uses the person-box top center as the head image point and the box bottom plus ankle-centered horizontal position as the ground-contact image point. It undistorts those pixels, constructs rays, intersects the foot ray with the ground plane, and projects the head ray onto the same vertical line. The reported sensitivity interval recomputes height at the two mount-height endpoints; it does not cover uncertainty in FOV, pitch, roll, lens distortion, vehicle pitch, body lean, or landmark placement.
 
-This is a geometry simulation, **not camera calibration**. A plausible-looking number does not make the assumed camera parameters true. For example, on the checked `rotated_2.mp4` clip the simulated path selected approximately 9.08 seconds and returned about 176.5 cm, with a mount-height sensitivity interval of about 155.7-197.3 cm. Treat this as a demonstration only.
+This is a geometry simulation, **not camera calibration**. A plausible-looking number does not make the assumed camera parameters true. In particular, the camera's position and orientation in the external left mirror are not provided, and the placeholder forward-facing pose may be substantially different from the real mount. Measure the camera pose relative to the vehicle floor and calibrate lens distortion before using metric height. Treat HMI estimates as demonstrations only.
+
+For a level camera with a centered principal point and no distortion, the focal length cancels from the estimated height for the same head and foot pixels. Consequently, supplying a different FOV alone may not change the result or improve accuracy; measured camera height, pitch and roll, lens distortion, and video rotation/crop are needed to establish the actual geometry.
 
 The HMI displays frontal shoulder width, hip width, torso length, and upper,
 lower, and total leg length in **simulated centimeters**. The analyzer first
@@ -104,7 +111,7 @@ the simulated height are illustrative only.
 
 ## Optional Camera Calibration Tools
 
-The calibration utility estimates **intrinsics** from chessboard images. It does not infer a vehicle camera mount pose from the chessboard. You must separately measure the camera position and orientation relative to the vehicle/floor frame if using calibrated geometry.
+The calibration utility estimates **intrinsics and lens distortion** from chessboard images. It does not infer a vehicle camera mount pose from the chessboard. You must separately measure the external-mirror camera position and orientation relative to the vehicle/floor frame if using calibrated geometry. This is important for a side-mounted camera, whose orientation is not represented by the HMI's placeholder forward-facing pose.
 
 Example with a 9-by-6 inner-corner board and measured 25 mm squares:
 

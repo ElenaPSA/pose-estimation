@@ -13,7 +13,19 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 
-SIMULATED_HORIZONTAL_FOV_DEG = 70.0
+CAMERA_IMAGE_SIZE_PX = (2048, 1280)
+SIMULATED_HORIZONTAL_FOV_DEG = 98.22
+SIMULATED_VERTICAL_FOV_DEG = 50.34
+REPORTED_DIAGONAL_FOV_DEG = 113.83
+IMPLIED_DIAGONAL_FOV_DEG = math.degrees(
+    2
+    * math.atan(
+        math.hypot(
+            math.tan(math.radians(SIMULATED_HORIZONTAL_FOV_DEG) / 2),
+            math.tan(math.radians(SIMULATED_VERTICAL_FOV_DEG) / 2),
+        )
+    )
+)
 SIMULATED_CAMERA_HEIGHT_M = 0.85
 SIMULATED_CAMERA_HEIGHT_RANGE_M = (0.75, 0.95)
 
@@ -38,6 +50,9 @@ class CameraCalibration:
     reprojection_rms_px: float | None
     camera_position_vehicle_m: tuple[float, float, float] | None = None
     camera_to_vehicle_rotation: np.ndarray | None = None
+    horizontal_fov_deg: float | None = None
+    vertical_fov_deg: float | None = None
+    reported_diagonal_fov_deg: float | None = None
 
     @classmethod
     def from_dict(cls, data: object) -> CameraCalibration:
@@ -78,6 +93,22 @@ class CameraCalibration:
         if rms is not None and (not np.isfinite(rms) or rms < 0):
             raise CameraCalibrationError("reprojection_rms_px must be non-negative.")
 
+        def read_fov(name: str) -> float | None:
+            value = intrinsics.get(name)
+            if value is None:
+                return None
+            try:
+                fov = float(value)
+            except (TypeError, ValueError) as error:
+                raise CameraCalibrationError(f"{name} must be a finite FOV in degrees.") from error
+            if not np.isfinite(fov) or not 0 < fov < 179:
+                raise CameraCalibrationError(f"{name} must be a finite FOV in degrees.")
+            return fov
+
+        horizontal_fov = read_fov("horizontal_fov_deg")
+        vertical_fov = read_fov("vertical_fov_deg")
+        diagonal_fov = read_fov("reported_diagonal_fov_deg")
+
         position: tuple[float, float, float] | None = None
         rotation: np.ndarray | None = None
         mount = data.get("camera_to_vehicle")
@@ -108,6 +139,9 @@ class CameraCalibration:
             reprojection_rms_px=rms,
             camera_position_vehicle_m=position,
             camera_to_vehicle_rotation=rotation,
+            horizontal_fov_deg=horizontal_fov,
+            vertical_fov_deg=vertical_fov,
+            reported_diagonal_fov_deg=diagonal_fov,
         )
 
     @classmethod
@@ -116,21 +150,35 @@ class CameraCalibration:
         image_size_px: tuple[int, int],
         camera_height_m: float = SIMULATED_CAMERA_HEIGHT_M,
         horizontal_fov_deg: float = SIMULATED_HORIZONTAL_FOV_DEG,
+        vertical_fov_deg: float = SIMULATED_VERTICAL_FOV_DEG,
     ) -> CameraCalibration:
-        """Build an explicitly assumed camera model, not a measured calibration."""
+        """Build spec-based or generic intrinsics with assumed vehicle extrinsics."""
         width, height = image_size_px
         if width <= 0 or height <= 0:
             raise CameraCalibrationError("Image dimensions must be positive.")
-        if camera_height_m <= 0 or not 1 < horizontal_fov_deg < 179:
+        if (
+            camera_height_m <= 0
+            or not 1 < horizontal_fov_deg < 179
+            or not 1 < vertical_fov_deg < 179
+        ):
             raise CameraCalibrationError("Invalid simulated camera assumptions.")
-        focal_length = width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
+        matches_camera_aspect = abs(
+            width / height - CAMERA_IMAGE_SIZE_PX[0] / CAMERA_IMAGE_SIZE_PX[1]
+        ) <= 1e-3
+        if not matches_camera_aspect:
+            horizontal_fov_deg = 70.0
+            vertical_fov_deg = math.degrees(
+                2 * math.atan(height / width * math.tan(math.radians(horizontal_fov_deg) / 2))
+            )
+        focal_x = width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
+        focal_y = height / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
         return cls(
             image_width=width,
             image_height=height,
             camera_matrix=np.asarray(
                 [
-                    [focal_length, 0, width / 2],
-                    [0, focal_length, height / 2],
+                    [focal_x, 0, width / 2],
+                    [0, focal_y, height / 2],
                     [0, 0, 1],
                 ],
                 dtype=np.float64,
@@ -145,6 +193,11 @@ class CameraCalibration:
                     [0.0, -1.0, 0.0],
                 ],
                 dtype=np.float64,
+            ),
+            horizontal_fov_deg=horizontal_fov_deg,
+            vertical_fov_deg=vertical_fov_deg,
+            reported_diagonal_fov_deg=(
+                REPORTED_DIAGONAL_FOV_DEG if matches_camera_aspect else None
             ),
         )
 
@@ -172,6 +225,9 @@ class CameraCalibration:
                 "camera_matrix": self.camera_matrix.tolist(),
                 "distortion_coefficients": self.distortion_coefficients.tolist(),
                 "reprojection_rms_px": self.reprojection_rms_px,
+                "horizontal_fov_deg": self.horizontal_fov_deg,
+                "vertical_fov_deg": self.vertical_fov_deg,
+                "reported_diagonal_fov_deg": self.reported_diagonal_fov_deg,
             },
             "camera_to_vehicle": mount,
         }
