@@ -178,11 +178,8 @@ const VideoCapture = (() => {
         let bestObservation = null;
         let bestQuality = -1;
         let reason = "No suitable person detected.";
-        for (const time of times) {
-          signal.throwIfAborted();
-          await waitFor(scanVideo, "seeked", () => { scanVideo.currentTime = time; }, signal);
-          status.textContent = `Scanning video at ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
-          context.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
+        const probe = async (source, time) => {
+          context.drawImage(source, 0, 0, canvas.width, canvas.height);
           const image = canvas.toDataURL("image/jpeg", .9);
           const response = await fetch("/probe-frame", {
             method: "POST",
@@ -200,8 +197,7 @@ const VideoCapture = (() => {
             ? samePerson(trackedBox, currentBox)
             : Boolean(validCandidate);
           if (sameTrack) trackedBox = currentBox;
-          const confident = Boolean(validCandidate && sameTrack);
-          if (confident) {
+          if (validCandidate && sameTrack) {
             const observation = {
               image,
               timestamp: time,
@@ -212,14 +208,8 @@ const VideoCapture = (() => {
             recentObservations.push(observation);
             if (recentObservations.length > 3) recentObservations.shift();
             confirmations = recentObservations.length;
-            if (confirmations >= 2 && observation.nearCamera) {
-              const selectedObservation = recentObservations.reduce(
-                (best, candidate) => candidate.quality > best.quality ? candidate : best
-              );
-              status.textContent = `Complete near-camera frame found. Scanning at ${selectedObservation.timestamp.toFixed(2)} s…`;
-              await captured(selectedObservation.image, selectedObservation.timestamp, signal);
-              return;
-            }
+            // Freeze on the frame that completed the confirmation so the still matches the playing video.
+            if (confirmations >= 2 && observation.nearCamera) return observation;
             if (confirmations >= 3) {
               for (const candidate of recentObservations) {
                 if (candidate.quality > bestQuality) {
@@ -239,6 +229,41 @@ const VideoCapture = (() => {
               : result.reason || "The detected person changed or was not confirmed.";
           }
           status.textContent = `Scanning video at ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
+          return null;
+        };
+        const freezeOn = async observation => {
+          status.textContent = `Complete near-camera frame found at ${observation.timestamp.toFixed(2)} s. Analyzing…`;
+          await captured(observation.image, observation.timestamp, signal);
+        };
+        // Probe the frames being played so detection stays in step with both figures.
+        let lastProbeTime = -1;
+        while (!video.ended) {
+          signal.throwIfAborted();
+          const time = video.currentTime;
+          if (video.paused || time === lastProbeTime || video.readyState < 2) {
+            await new Promise(resolve => setTimeout(resolve, 80));
+            continue;
+          }
+          lastProbeTime = time;
+          const observation = await probe(video, time);
+          if (observation) {
+            await freezeOn(observation);
+            return;
+          }
+        }
+        if (!bestObservation) {
+          recentObservations = [];
+          confirmations = 0;
+          trackedBox = null;
+          for (const time of times) {
+            signal.throwIfAborted();
+            await waitFor(scanVideo, "seeked", () => { scanVideo.currentTime = time; }, signal);
+            const observation = await probe(scanVideo, time);
+            if (observation) {
+              await freezeOn(observation);
+              return;
+            }
+          }
         }
         if (!bestObservation) {
           throw new Error(`No high-confidence complete-body frame in ${examined} checks. ${reason} Move closer while keeping the head and both feet inside the frame.`);

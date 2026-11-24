@@ -84,7 +84,8 @@ def test_hmi_contains_driver_profiles_and_seat_studio_without_height() -> None:
     assert ".detection-viewport.scanning .detection-sweep { animation: person-scan 2s linear infinite; }" in HTML
     assert "100% { top: 100%; opacity: .75; }" in HTML
     assert "await scanAnimation;" not in HTML
-    assert "Video plays independently" in HTML
+    assert "Video keeps playing" in HTML
+    assert "Frozen frame; estimating morphology segments" in HTML
     assert HTML.count('<line id="cameraTo') == 0
     assert 'id="detectedPersonBox"' not in HTML
     assert "<polygon" not in HTML
@@ -203,7 +204,8 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert "confirmations >= 2 && observation.nearCamera" in video_source
         assert "confirmations >= 3" in video_source
         assert "for (const time of times)" in video_source
-        assert "context.drawImage(scanVideo" in video_source
+        assert "await probe(video, time)" in video_source
+        assert "await probe(scanVideo, time)" in video_source
         assert "validCandidate && sameTrack" in video_source
         assert "observation.nearCamera" in video_source
         assert "Video scan complete. Analyzing the closest complete frame" in video_source

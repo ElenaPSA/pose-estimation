@@ -672,10 +672,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     signal.throwIfAborted();
     imageView.image = image;
     imageView.dataUrl = dataUrl;
-    status.textContent = `Analyzing the closest complete frame captured at ${timestamp.toFixed(2)} s…`;
-    detectionStatus.textContent = sampledPreview
-      ? `Analyzing sampled frame at ${timestamp.toFixed(2)} s…`
-      : `Mirroring video while analyzing selected frame at ${timestamp.toFixed(2)} s…`;
+    stopPlaybackMirror();
+    detectionVideoFrame.hidden = true;
+    detectionImage.src = dataUrl;
+    detectionImage.hidden = false;
+    detectionViewport.hidden = false;
+    detectionViewport.classList.add("scanning");
+    status.textContent = `Analyzing the complete frame detected at ${timestamp.toFixed(2)} s…`;
+    detectionStatus.textContent = `Person detected at ${timestamp.toFixed(2)} s. Frozen frame; estimating morphology segments…`;
     try {
       const response = await fetch("/analyze", {
         method: "POST",
@@ -699,8 +703,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       const morphology = result.morphology_dimensions_cm;
       updateSeat(result.height_cm, morphology?.torso_length);
       const hasLandmarks = renderMorphologyFigure(dataUrl, result.morphology_figure_keypoints, morphology);
-      detectionStatus.textContent = `${hasLandmarks ? "2D landmarks shown" : "No reliable pose landmarks available"}. Selected still: ${timestamp.toFixed(2)} s. ${
-        sampledPreview ? "Sampled preview only." : "Video plays independently."}`;
+      detectionStatus.textContent = `${hasLandmarks ? "2D landmarks shown" : "No reliable pose landmarks available"}. Frozen at detected frame ${timestamp.toFixed(2)} s. ${
+        sampledPreview ? "Sampled preview only." : "Video keeps playing."}`;
       status.textContent = calibrated
         ? `Calibrated camera height estimate complete at ${timestamp.toFixed(2)} s. Review the calibration and geometry residual before use.`
         : simulated
