@@ -43,7 +43,7 @@ const VideoCapture = (() => {
     const distance = Math.hypot(previousX - currentX, previousY - currentY);
     return overlap >= .05 || distance <= .08 * Math.SQRT2;
   }
-  function mount({captured, reset}) {
+  function mount({captured, reset, progress, playback, failed}) {
     const input = document.getElementById("videoFile");
     const fileStatus = document.getElementById("videoFileStatus");
     const video = document.getElementById("sourceVideo");
@@ -127,12 +127,13 @@ const VideoCapture = (() => {
               if (event.error) throw new Error(event.error);
               if (event.type === "frame") {
                 preview.src = event.image;
+                progress(event.image, event.timestamp);
                 status.textContent = `Local decoded preview (sampled frames): ${event.timestamp.toFixed(2)} s. Checking full-body visibility…`;
-                await new Promise(resolve => setTimeout(resolve, 250));
                 signal.throwIfAborted();
               } else if (event.type === "captured") {
                 preview.src = event.image;
-                await captured(event.image, event.timestamp, signal);
+                progress(event.image, event.timestamp);
+                await captured(event.image, event.timestamp, signal, true);
                 return true;
               }
               return false;
@@ -169,6 +170,7 @@ const VideoCapture = (() => {
         const context = canvas.getContext("2d");
         if (!context || !canvas.width || !canvas.height) throw new Error("Video frame capture is unavailable.");
         await video.play();
+        playback(video);
         let confirmations = 0;
         let examined = 0;
         let trackedBox = null;
@@ -214,12 +216,6 @@ const VideoCapture = (() => {
               const selectedObservation = recentObservations.reduce(
                 (best, candidate) => candidate.quality > best.quality ? candidate : best
               );
-              video.pause();
-              if (Math.abs(video.currentTime - selectedObservation.timestamp) > .001) {
-                await waitFor(video, "seeked", () => {
-                  video.currentTime = selectedObservation.timestamp;
-                }, signal);
-              }
               status.textContent = `Complete near-camera frame found. Scanning at ${selectedObservation.timestamp.toFixed(2)} s…`;
               await captured(selectedObservation.image, selectedObservation.timestamp, signal);
               return;
@@ -247,23 +243,16 @@ const VideoCapture = (() => {
         if (!bestObservation) {
           throw new Error(`No high-confidence complete-body frame in ${examined} checks. ${reason} Move closer while keeping the head and both feet inside the frame.`);
         }
-        video.pause();
-        if (Math.abs(video.currentTime - bestObservation.timestamp) > .001) {
-          await waitFor(video, "seeked", () => {
-            video.currentTime = bestObservation.timestamp;
-          }, signal);
-        }
         status.textContent = `Video scan complete. Analyzing the closest complete frame at ${bestObservation.timestamp.toFixed(2)} s…`;
         await captured(bestObservation.image, bestObservation.timestamp, signal);
       } catch (error) {
+        failed();
         status.textContent = signal.aborted ? "Video analysis cancelled. Choose a video to try again." :
           error.name === "TimeoutError" ? "Local inference timed out. Check the server/model setup and try again." :
           error.message || "Video processing failed.";
         document.getElementById("detectionStatus").textContent = status.textContent;
       } finally {
-        if (!video.hidden && !signal.aborted) {
-          video.play().catch(() => {});
-        } else {
+        if (signal.aborted) {
           video.pause();
         }
         scanVideo.removeAttribute("src");

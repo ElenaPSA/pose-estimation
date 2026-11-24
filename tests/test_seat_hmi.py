@@ -21,7 +21,10 @@ from driver_pose_estimation.models import (
 from driver_pose_estimation.seat_hmi import HTML, MorphologyAnalyzer, _HmiHandler, _HmiServer
 
 
-def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
+def test_hmi_contains_driver_profiles_and_seat_studio_without_height() -> None:
+    assert "<h1>MORPHOLOGY SUMMARY AND SEATING CONFIGURATION PREVIEW</h1>" in HTML
+    assert "DRIVER FIT LAB" not in HTML
+    assert 'class="brand-mark"' not in HTML
     assert 'data-size="small"' in HTML
     assert 'data-size="medium"' in HTML
     assert 'data-size="large"' in HTML
@@ -29,9 +32,15 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'id="seatStudio"' in HTML
     assert 'src="/assets/seat-studio.js"' in HTML
     assert "SeatStudio.mount();" in HTML
-    assert "SeatStudio.update(h);" in HTML
-    assert 'id="seatStudioUnavailable"' in HTML
-    assert "const previewAvailable = h >= 120 && h <= 230;" in HTML
+    assert 'id="seatModelUnavailable"' in HTML
+    assert "SeatStudio.supports(height)" in HTML
+    assert "updateSeat(result.height_cm, morphology?.torso_length);" in HTML
+    assert "updateSeat(representativeHeights[button.dataset.size]);" in HTML
+    assert 'id="heightValue"' not in HTML
+    assert 'id="height"' not in HTML
+    assert "<small>&lt;160 cm</small>" in HTML
+    assert "<small>160–180 cm</small>" in HTML
+    assert "<small>&gt;180 cm</small>" in HTML
     assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in HTML
     assert "NO SEAT ACTUATION" in HTML
     assert 'src="/assets/seat-reference-side.png"' not in HTML
@@ -51,11 +60,12 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'id="sourceVideo"' in HTML
     assert 'id="decodedVideoPreview"' in HTML
     assert 'id="cancelVideo"' not in HTML
-    assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
-    assert "2048 × 1280 camera specs" in HTML
-    assert "98.22° horizontal, 50.34° vertical" in HTML
+    assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" not in HTML
+    assert "fx 830 px, fy 1078 px, cx 964 px, cy 544 px at 1928 × 1088" in HTML
     assert "Mirror position: X 74 cm, Y -85 cm, Z 87 cm" in HTML
     assert "camera height above ground: 115 cm" in HTML
+    assert "yaw +93° from forward toward vehicle-left, effective pitch −11.5°, roll −0.1°" in HTML
+    assert "differs from the user-supplied −15°" in HTML
     assert 'src="/assets/video-capture.js"' in HTML
     assert "VideoCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
@@ -65,53 +75,58 @@ def test_hmi_contains_driver_profiles_and_demo_seat_parameters() -> None:
     assert 'id="detectionViewport"' in HTML
     assert 'id="detectionStage"' in HTML
     assert 'id="detectionImage"' in HTML
-    assert "Detecting Person</div>" in HTML
+    assert "Detecting Person / selected frame</div>" in HTML
     assert 'id="detectionStatus"' in HTML
-    assert "function startDetectionAnimation(signal)" in HTML
-    assert "detectionStatusTimers.push(window.setTimeout(() => {" in HTML
-    assert "      }, duration));" in HTML
-    assert HTML.index("startDetectionAnimation(signal);") < HTML.index('fetch("/analyze"')
-    assert "function showDetectionBox(box)" in HTML
-    assert ".detection-viewport.scanning #detectionImage { animation: grayscale-reveal 5s ease-out both; }" in HTML
-    assert "@keyframes camera-highlight" in HTML
+    assert 'id="detectionVideoFrame"' in HTML
+    assert "function startPlaybackMirror(video)" in HTML
+    assert "function showDetectionBox(box)" not in HTML
     assert "@keyframes person-scan" in HTML
-    assert ".detection-viewport.scanning .detection-sweep { animation: person-scan 5s linear both; }" in HTML
-    assert "100% { transform: translateY(var(--scan-distance)); opacity: .75; }" in HTML
-    assert 'id="detectionColorImage"' in HTML
-    assert "detectionColorImage.src = dataUrl;" in HTML
-    assert "detectionColorImage.style.clipPath =" in HTML
-    assert "await scanAnimation;" in HTML
-    assert HTML.count('<line id="cameraTo') == 4
-    assert '<rect id="detectedPersonBox" class="person-box"/>' in HTML
+    assert ".detection-viewport.scanning .detection-sweep { animation: person-scan 2s linear infinite; }" in HTML
+    assert "100% { top: 100%; opacity: .75; }" in HTML
+    assert "await scanAnimation;" not in HTML
+    assert "Video plays independently" in HTML
+    assert HTML.count('<line id="cameraTo') == 0
+    assert 'id="detectedPersonBox"' not in HTML
     assert "<polygon" not in HTML
-    assert ".detection-viewport.detected .detection-overlay { animation: camera-highlight" in HTML
+    assert HTML.index('class="detection-panel"') < HTML.index('id="morphologyFigure"') < HTML.index('id="detectionStatus"')
     assert 'mode: "video_demo"' in HTML
-    assert "simulated camera model" in HTML
-    assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" in HTML
-    assert "MODEL PERFORMANCE" in HTML
-    assert 'id="morphologyConfidence"' in HTML
-    assert 'id="faceConfidence"' in HTML
-    assert "physical height cannot be established" in HTML
-    assert 'id="measureHeight"' in HTML
-    assert 'id="measureShoulder"' in HTML
-    assert 'id="measureHip"' in HTML
-    assert 'id="measureFace"' in HTML
-    assert 'id="measureTorso"' in HTML
-    assert 'id="measureLegs"' in HTML
+    assert "MODEL PERFORMANCE" not in HTML
+    assert 'id="morphologyConfidence"' not in HTML
+    assert 'id="faceConfidence"' not in HTML
+    for screen in ("capture", "adjustments", "animation", "reference"):
+        assert f'data-screen="{screen}"' in HTML
+    assert 'id="measureHeight"' not in HTML
+    assert 'id="measurementNote"' not in HTML
+    assert 'id="measureShoulder"' not in HTML
+    assert 'id="measureHip"' not in HTML
+    assert 'id="measureFace"' not in HTML
+    assert 'id="measureTorso"' not in HTML
+    assert 'id="measureLegs"' not in HTML
     assert 'id="measureUpperBody"' not in HTML
     assert 'id="measureLowerBody"' not in HTML
-    assert 'id="measureUpperLeg"' in HTML
-    assert 'id="measureLowerLeg"' in HTML
-    assert "Shoulder width</span>" in HTML
-    assert "Hip width</span>" in HTML
-    assert "Torso length</span>" in HTML
-    assert "Upper leg length</span>" in HTML
-    assert "Lower leg length</span>" in HTML
-    assert "cm · simulated" in HTML
+    assert 'id="measureUpperLeg"' not in HTML
+    assert 'id="measureLowerLeg"' not in HTML
+    assert 'id="measureUpperArm"' not in HTML
+    assert 'id="measureLowerArm"' not in HTML
+    assert 'id="morphologyFigure"' in HTML
+    assert 'id="morphologyFigureImage"' in HTML
+    assert 'id="morphologyShoulders"' in HTML
+    assert 'id="morphologyTorso"' in HTML
+    assert 'id="morphologyUpperLeft"' in HTML
+    assert 'id="morphologyUpperArmLeft"' in HTML
+    assert 'id="morphologyLowerArmRight"' in HTML
+    assert 'id="morphologyPointLeftElbow"' in HTML
+    assert 'id="morphologyPointRightWrist"' in HTML
+    assert 'id="figureLowerLegLength"' in HTML
+    assert 'id="figureUpperArmLength"' in HTML
+    assert 'id="figureLowerArmLength"' in HTML
+    assert "not independent 3D anatomical measurements" in HTML
+    assert "Shoulders</span>" in HTML
+    assert "Hips</span>" in HTML
+    assert "Torso</span>" in HTML
     assert 'id="torso"' not in HTML
     assert "proportionWord" not in HTML
-    assert HTML.index("LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("DRIVER DIMENSIONS")
-    assert HTML.index("SIMULATED CAMERA ESTIMATE · NOT CALIBRATED") < HTML.index('id="seatStudio"')
+    assert HTML.index("LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE") < HTML.index("SIZE CLASS")
 
 
 def test_hmi_server_rejects_duplicate_port() -> None:
@@ -156,7 +171,7 @@ def test_hmi_serves_dashboard_locally() -> None:
         response = connection.getresponse()
         page = response.read().decode("utf-8")
         assert response.status == 200
-        assert "DRIVER DIMENSIONS" in page
+        assert "SIZE CLASS" in page
 
         connection.request("GET", "/assets/seat-studio.js")
         studio_response = connection.getresponse()
@@ -183,7 +198,8 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert 'Playing converted local video' in video_source
         assert "Selected video: ${file.name}" in video_source
         assert "await video.play();" in video_source
-        assert "video.play().catch(() => {});" in video_source
+        assert "video.currentTime = selectedObservation.timestamp" not in video_source
+        assert "video.currentTime = bestObservation.timestamp" not in video_source
         assert "confirmations >= 2 && observation.nearCamera" in video_source
         assert "confirmations >= 3" in video_source
         assert "for (const time of times)" in video_source
@@ -508,6 +524,7 @@ def test_video_transcode_endpoint_returns_playable_h264_mp4(tmp_path) -> None:
 def video_pose() -> FramePoseResult:
     coords = {
         0: (100, 25), 5: (80, 60), 6: (120, 60),
+        7: (70, 80), 8: (130, 80), 9: (75, 100), 10: (125, 100),
         11: (85, 105), 12: (115, 105), 13: (85, 150),
         14: (115, 150), 15: (85, 205), 16: (115, 205),
     }
@@ -516,6 +533,37 @@ def video_pose() -> FramePoseResult:
         [Keypoint(i, str(i), *coords.get(i, (100, 30)), .9) for i in range(17)],
     )
     return FramePoseResult(0, 0, 1, 1, pose, [pose])
+
+
+@pytest.mark.parametrize(
+    ("height_cm", "expected"),
+    [(159.9, "small"), (160.0, "medium"), (180.0, "medium"), (180.1, "large")],
+)
+def test_size_class_boundaries_use_unrounded_height(monkeypatch, height_cm, expected) -> None:
+    class Estimator:
+        def estimate(self, image, *args):
+            result = video_pose()
+            result.driver.bounding_box = BoundingBox(50, 10, 150, 110)
+            return result
+
+    class FaceDetector:
+        def detect(self, image, pose):
+            return None
+
+    monkeypatch.setattr(_HmiHandler, "pose_estimator", Estimator())
+    monkeypatch.setattr(_HmiHandler, "face_detector", FaceDetector())
+    ok, encoded = cv2.imencode(".png", np.zeros((250, 200, 3), dtype=np.uint8))
+    assert ok
+    handler = object.__new__(_HmiHandler)
+    result = handler._analyze_payload({
+        "reference_length_cm": height_cm,
+        "frontal": {
+            "image": "data:image/png;base64," + base64.b64encode(encoded).decode(),
+            "marker_points": [{"x": 10, "y": 10}, {"x": 10, "y": 110}],
+        },
+    })
+
+    assert result["size_class"] == expected
 
 
 @pytest.mark.parametrize(
@@ -551,10 +599,13 @@ def test_video_analysis_uses_reported_camera_height(
     ).height_cm
     assert result["height_cm"] == pytest.approx(expected_height, abs=0.1)
     assert result["height_sensitivity_range_cm"][1] == pytest.approx(expected_height * 1.25 / 1.15, abs=0.1)
+    assert result["morphology_figure_keypoints"][5] == {"x": 40.0, "y": 24.0}
+    assert result["morphology_figure_keypoints"][15] == {"x": 42.5, "y": 82.0}
     assert result["calibration_mode"] == "simulated_vehicle_camera"
     assert any("ground Z=-0.28 m" in warning for warning in result["warnings"])
-    assert any("STARTING POSE, NOT MEASURED: pitch -10" in warning for warning in result["warnings"])
-    assert any("no optimization has been performed" in warning for warning in result["warnings"])
+    assert any("effective pitch -11.5 degrees" in warning and "user-supplied -15 degrees" in warning for warning in result["warnings"])
+    assert any("Yaw +93 degrees from vehicle-forward toward vehicle-left is unverified" in warning for warning in result["warnings"])
+    assert any("fitted to seven videos of three people" in warning for warning in result["warnings"])
     assert any("90 degree anticlockwise" in warning for warning in result["warnings"])
     assert any("FOV SPECIFICATION MISMATCH" in warning for warning in result["warnings"])
 
@@ -723,6 +774,16 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert centimeter_morphology["hip_width"] == pytest.approx(
             .1705 * expected_span_cm, abs=.1
         )
+        assert centimeter_morphology["upper_arm_length"] == pytest.approx(
+            analysis["morphology_proportions"]["upper_arm_length_over_span"]
+            * expected_span_cm,
+            abs=.1,
+        )
+        assert centimeter_morphology["lower_arm_length"] == pytest.approx(
+            analysis["morphology_proportions"]["lower_arm_length_over_span"]
+            * expected_span_cm,
+            abs=.1,
+        )
         assert centimeter_morphology["torso_length"] == pytest.approx(
             .2557 * expected_span_cm, abs=.1
         )
@@ -730,13 +791,19 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert any("90 degree anticlockwise" in warning for warning in analysis["warnings"])
         assert any("FOV SPECIFICATION MISMATCH" in warning for warning in analysis["warnings"])
         assert any("ground Z=-0.28 m" in warning for warning in analysis["warnings"])
-        assert any("STARTING POSE, NOT MEASURED: pitch -10" in warning for warning in analysis["warnings"])
+        assert any("effective pitch -11.5 degrees" in warning and "user-supplied -15 degrees" in warning for warning in analysis["warnings"])
         assert analysis["face_detection_confidence"] == pytest.approx(.9)
         morphology = analysis["morphology_proportions"]
         assert morphology["reference_span_px"] == pytest.approx(176.0)
         assert morphology["shoulder_width_over_span"] == pytest.approx(0.2273)
         assert morphology["hip_width_over_span"] == pytest.approx(0.1705)
         assert morphology["torso_length_over_span"] == pytest.approx(0.2557)
+        assert morphology["upper_arm_length_over_span"] == pytest.approx(
+            22.36 / 176, abs=.001
+        )
+        assert morphology["lower_arm_length_over_span"] == pytest.approx(
+            20.62 / 176, abs=.001
+        )
         assert morphology["upper_leg_length_over_span"] == pytest.approx(0.2557)
         assert morphology["lower_leg_length_over_span"] == pytest.approx(0.3125)
         assert morphology["total_leg_length_over_span"] == pytest.approx(0.5682)

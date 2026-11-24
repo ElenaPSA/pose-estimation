@@ -2,7 +2,7 @@
 
 A Python project for detecting a driver's body pose, summarizing image-space morphology, and previewing illustrative seat adjustments. The primary browser workflow accepts a **local video file**; it does not use a webcam.
 
-> **Height is not fully calibrated.** The HMI uses the supplied camera resolution and horizontal/vertical FOV for matching landscape images and portrait images rotated 90 degrees anticlockwise and resized without cropping; other landscape aspect ratios use a generic model. It uses the reported camera position and 1.15 m height above ground and the suggested pitch and roll starting values, but camera orientation and lens distortion remain unmeasured. Displayed height is not a validated physical measurement.
+> **Height is not fully calibrated.** The HMI uses an internal height estimate for size classification and morphology scaling; it does not display the height itself. The camera orientation and lens distortion remain unmeasured, so the estimate and derived measurements are not validated physical measurements.
 
 ## What the Project Does
 
@@ -10,9 +10,19 @@ A Python project for detecting a driver's body pose, summarizing image-space mor
 - Uploads a local video to the Seat HMI, checks frames for a complete upright person, and analyzes a selected frame.
 - Computes image-space frontal/lateral morphology ratios in a separate pre-entry capture workflow.
 - Offers a chessboard intrinsic-calibration utility and vehicle-pose geometry API. The HMI does not currently have a calibration-file upload control.
-- Shows illustrative seat targets in a browser simulation. It sends no vehicle commands and does not actuate a real seat.
+- Classifies estimated height provisionally as small (below 160 cm), medium (160–180 cm inclusive), or large (above 180 cm). The HMI sends no vehicle commands.
+- Shows a seat-movement simulation using the internal estimated height. A manually selected size uses a representative height; the simulation is illustrative, not a safety or comfort recommendation.
 
-The HMI runs YuNet face detection on the selected frame and displays its detection confidence. Face size is not used as the height scale.
+The seat simulation fits two reported trials at 163 and 185 cm. Relative to the nominal reference, `deltaX_mm = -4.545*(height_cm-174)` and `deltaZ_mm = 0.909*(height_cm-174)` approximately, clipped to seat travel limits. Results outside the trial range are unvalidated extrapolations.
+The 153 and 178 cm videos supply reference heights, not measured seat targets; they do not add seat-fitting trials.
+
+The backrest is a separate **illustrative, unvalidated hypothesis**, not a fitted comfort or driving recommendation. It assumes a nominal 50 cm torso at the 25-degree reference and retains that torso's horizontal shoulder offset: `angle = asin(50 * sin(25 degrees) / estimated_torso_cm)`, bounded to 20–30 degrees. This assumed reference and the ±5-degree cap are not measured; the detected torso is a projected, uncalibrated image-space estimate. A torso estimate outside 15–50% of estimated height, or one that is missing, leaves the backrest estimate unavailable and shows the nominal angle only as a visual placeholder. Manual size selection has no torso estimate. Control reach, comfort and the measured initial position are not captured. The preview does not actuate the seat.
+
+The detecting-person panel shows the selected frame with available 2D pose segments and illustrative estimated lengths, rather than a bounding box. The HMI runs YuNet face detection on the selected frame; face size is not used as the height scale.
+
+Use the view buttons to switch between video and profile, seat adjustments, animation, and reference details. Reference details include the assumed nominal-seat schematic. Camera assumptions are expandable on the video view. The layout is compact on desktop screens and allows scrolling on smaller screens or when content is expanded.
+
+All seat views share a fixed, shaded steering-wheel schematic with rim, spokes, hub and column, positioned closer to the seat. The backrest card shows its signed movement and absolute target; the drawings have no angle labels or arcs. Without detected torso data, the drawing uses the nominal 25-degree angle and the card labels the movement unavailable. Its geometry is illustrative, not a measured control-reach model.
 
 ## Requirements
 
@@ -74,38 +84,42 @@ python -m driver_pose_estimation.seat_hmi --port 8766
 
 Each running server keeps its HTML and JavaScript version together. After changing code, stop the old server with `Ctrl+C` and launch it again. The HMI refuses to start if the requested port is already in use; stop the existing server or select a different port with `--port`.
 
-The browser plays the uploaded video while a separate video element scans up to four frames per second, capped at 240 samples, independent of inference time. The preview pauses on the selected frame during analysis and resumes afterward. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback scans up to four original frames per second, capped at 240 and at the source frame count, and displays sampled frames instead. Brief appearances between checks may still be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end. The detection scan and analysis then run on the right.
+The browser plays the uploaded video while the right-hand figure mirrors its playback. A separate video element scans up to four frames per second, capped at 240 samples. Once analysis completes, the right-hand figure freezes on the selected frame and reveals available pose segments; the left video continues playing. The selected frame's timestamp may differ from the current playback time. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback scans up to four original frames per second, capped at 240 and at the source frame count, and shows sampled frames instead of synchronized full video playback. Brief appearances between checks may still be missed. Selection tracks the same person, requires consecutive complete-body detections, and prefers a near-camera frame that still passes the full-body gate. If no such near-camera pair occurs, the best stable complete frame is used at the end.
 
 The HMI temporarily stores the upload and any transcoded preview in a system temporary directory and removes them when processing finishes. It does not save permanent copies or send video externally. A browser decoding error can produce an aborted source-blob request in the developer console; the local transcode/fallback handles that case.
 
 ## Height Estimate and Camera Assumptions
 
-For matching landscape frames and portrait frames assumed to be rotated from this camera, the HMI uses the supplied specifications to form a pinhole camera matrix. These are reported specifications, not a chessboard calibration:
+For matching landscape frames and portrait frames assumed to be rotated from this camera, the HMI uses the supplied estimated intrinsics to form a pinhole camera matrix. These are not a full calibration:
 
 | Parameter | Default assumption |
 |---|---:|
-| Native resolution | 2048 × 1280 px |
-| Horizontal field of view | 98.22 degrees |
-| Vertical field of view | 50.34 degrees |
+| Native active resolution | 1928 × 1088 px |
+| Horizontal field of view (derived from `fx`) | 98.54 degrees |
+| Vertical field of view (derived from `fy`) | 53.55 degrees |
 | Reported diagonal field of view | 113.83 degrees |
-| Derived focal lengths | `fx ≈ 886.70 px`, `fy ≈ 1361.92 px` |
+| Estimated intrinsics | `fx = 830 px`, `fy = 1078 px`, `cx = 964 px`, `cy = 544 px` |
 | Lens distortion | Assumed zero, not measured |
 | Reported mirror camera position | X = 0.74 m aft, Y = -0.85 m, Z = 0.87 m in the supplied vehicle frame |
-| Camera pitch / roll starting values | -10 degrees downward / 0 degrees; yaw assumed forward |
-| Proposed pitch / roll search ranges | -15 to -5 degrees / -3 to +3 degrees; not optimized |
+| Camera pose model values | yaw +93 degrees from forward toward vehicle-left (direction unverified); effective pitch -11.5 degrees downward; roll -0.1 degrees |
+| Pitch / roll fitting ranges | -15 to -5 degrees / -3 to +3 degrees; 0.1-degree grid |
 | Camera height above ground | 1.15 m |
 | Ground plane | Vehicle `z = -0.28 m` |
 | Illustrative camera-height sensitivity | 1.05-1.25 m; not a measured uncertainty interval |
 
-The supplied FOVs are internally inconsistent for a rectilinear camera at this resolution: horizontal and vertical FOV imply a diagonal FOV of about 102.54 degrees, not the reported 113.83 degrees. The HMI retains the diagonal value as reported metadata and warns about the discrepancy; it cannot consistently use all three FOVs to create one rectilinear camera matrix. A chessboard calibration should replace these approximate intrinsics and measure lens distortion.
+The supplied intrinsic values are estimates, not a chessboard calibration. Their derived horizontal/vertical FOVs imply a diagonal FOV of about 103.41 degrees, not the reported 113.83 degrees. The HMI retains the diagonal value as reported metadata and warns about the discrepancy; lens distortion remains assumed zero.
 
-Portrait frames use the specified native intrinsics rotated 90 degrees anticlockwise, swapping the focal-length axes, and scaled to the frame dimensions. The user reports that the video is not cropped. The whole sensor image is therefore assumed to have been resized, potentially with different horizontal and vertical scale factors. The reported video is 1080 × 1920, whereas the rotated 2048 × 1280 native frame would be 1280 × 2048; rotation alone cannot account for this difference. Unmatched landscape aspect ratios still use the generic 70-degree simulation. The pose uses the suggested -10-degree pitch, 0-degree roll, and assumed forward yaw relative to the displayed image axes; these are not measured camera extrinsics.
+Frames within 1% of the 1928 × 1088 active-array aspect ratio use the estimated intrinsics scaled to their dimensions. This includes the 1920 × 1080 horizontal stream. Portrait frames use the estimated native intrinsics rotated 90 degrees anticlockwise, including the principal point, and scaled to the video frame; cropping is not modeled. Use the rotated portrait videos for this workflow. Unmatched landscape aspect ratios still use the generic 70-degree simulation. The pose model uses yaw +93 degrees from vehicle-forward toward vehicle-left, effective pitch -11.5 degrees, and roll -0.1 degrees. The yaw sign and camera extrinsics are not measured.
 
 For height, the code uses the person-box top center as the head image point and the box bottom plus ankle-centered horizontal position as the ground-contact image point. It undistorts those pixels, constructs rays, intersects the foot ray with the ground plane, and projects the head ray onto the same vertical line. The reported sensitivity interval recomputes height at the two mount-height endpoints; it does not cover uncertainty in FOV, pitch, roll, lens distortion, vehicle pitch, body lean, or landmark placement.
 
 The provided diagram has X positive aft, Y positive right, and Z positive up. The HMI maps the reported (0.74, -0.85, 0.87) m to its existing [right, forward, up] convention as (-0.85, -0.74, 0.87) m, assuming the origins coincide. With the separately measured camera height of 1.15 m above ground, the ground plane is at vehicle Z = 0.87 - 1.15 = -0.28 m. Geometry uses the camera's vehicle-frame position and this ground plane; height is measured relative to the ground, not the vehicle Z origin.
 
-This remains a geometry simulation, **not a complete camera calibration**. Pitch is defined positive upward, so -10 degrees points the optical axis downward; roll is a rotation about the displayed camera optical axis, with zero meaning no optical-axis roll. The suggested pitch and roll are starting values, not measurements. The specified search ranges are retained for future calibration but are not automatically optimized without independently measured reference data. Measure camera orientation relative to the vehicle and calibrate lens distortion before using metric height. Changing horizontal camera position changes reconstructed vehicle-frame ground coordinates but, for the same rays and flat ground, does not itself change the person's height. Treat HMI estimates as demonstrations only.
+This remains a geometry simulation, **not a complete camera calibration**. Pitch is positive upward, and roll is a rotation about the displayed camera optical axis. The effective pitch and roll were fitted using one selected frame from each of seven labeled videos, with equal weight per person in squared error. The -11.5 degree pitch differs from the user-supplied -15 degree physical-pitch assumption; neither fitted angle should be interpreted as a measured physical angle. The best grid fit (-11.5, 0.0 degrees) failed the video selection gate on one video, so the adjacent (-11.5, -0.1 degrees) fit was used and all seven videos were rechecked. Person-weighted root mean square error on those fitting frames decreased from 8.12 cm to 7.70 cm versus the previous -12/0 model, while per-video mean absolute error increased from 7.43 cm to 7.72 cm. These are training results, not independent validation; one person's reference height was measured without footwear. Yaw cannot be recovered from height in this model and remains the supplied +93 degree assumption. Measure camera orientation relative to the vehicle and calibrate lens distortion before using metric height. Changing horizontal camera position changes reconstructed vehicle-frame ground coordinates but, for the same rays and flat ground, does not itself change the person's height. Treat HMI estimates as demonstrations only.
+
+A subsequent OpenCV-selection check added a fourth person, reported as 153 cm. Its selected frame estimated 161.5 cm, while the existing seven frames estimated 156.6–195.3 cm for people reported as 163, 178, and 185 cm. The eight-frame, person-weighted RMSE was 7.91 cm; those seven frames were used in the existing fit, so this is not independent validation. A shared linear correction reduced fitting RMSE to 7.42 cm but increased leave-one-person-out RMSE to 10.59 cm and estimated the 153 cm person at 162.7 cm when fitted to all four people. It was not adopted. Browser transcoding can select different frames. More measured camera geometry, distortion, and independent labeled people and frames are needed to demonstrate a reliable improvement.
+
+An exploratory multi-frame check used eligible OpenCV-decoded frames sampled at up to four frames per second, with the current camera model and person tracking. The median of estimates within 0.55 seconds of the selected frame reduced person-weighted RMSE across these eight videos from 8.01 to 6.09 cm, but worsened the 153 cm example from 161.8 to 162.4 cm and the 178 cm example from 180.7 to 173.4 cm. These are uncompressed probe-frame results, not the browser analysis pipeline or independent validation. Full-video and near-camera medians performed worse overall. No multi-frame estimator was deployed.
 
 For a level camera with a centered principal point and no distortion, the focal length cancels from the estimated height for the same head and foot pixels. Consequently, supplying a different FOV alone may not change the result or improve accuracy; measured camera height, pitch and roll, lens distortion, and video rotation/crop are needed to establish the actual geometry.
 
@@ -115,8 +129,8 @@ computes 2D ratios to the face-center-to-ankle-center pixel span, then scales
 those ratios using the simulated person-box height. These values are not
 calibrated physical dimensions and are not corrected for perspective or body
 orientation. The reported mount-height sensitivity range applies to height;
-morphology values inherit the same simulated scale. Seat targets derived from
-the simulated height are illustrative only.
+morphology values inherit the same simulated scale. The illustrative seat
+simulation uses the same unvalidated height estimate.
 
 ## Optional Camera Calibration Tools
 

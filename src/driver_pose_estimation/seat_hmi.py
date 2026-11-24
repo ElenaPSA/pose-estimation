@@ -26,10 +26,15 @@ from .camera_calibration import (
   CameraCalibration,
   CameraCalibrationError,
   HeightEstimate,
+  SIMULATED_CX_PX,
+  SIMULATED_CY_PX,
+  SIMULATED_FX_PX,
+  SIMULATED_FY_PX,
   SIMULATED_CAMERA_HEIGHT_M,
   SIMULATED_CAMERA_HEIGHT_RANGE_M,
   SIMULATED_CAMERA_PITCH_DEG,
   SIMULATED_CAMERA_ROLL_DEG,
+  SIMULATED_CAMERA_YAW_DEG,
   IMPLIED_DIAGONAL_FOV_DEG,
   REPORTED_DIAGONAL_FOV_DEG,
   SIMULATED_HORIZONTAL_FOV_DEG,
@@ -58,6 +63,7 @@ HTML = r"""<!doctype html>
 <style>
 :root {
   color-scheme: dark;
+  --capture-media-height: clamp(220px, calc(100vh - 360px), 650px);
   --bg: #060b12; --panel: #0d1724; --panel2: #111d2d; --line: #26364a;
   --text: #eaf1fb; --muted: #9aa9bc; --accent: #ffb16d;
   --cyan: #6cc7c2; --green: #79c58f; --amber: #d8a15a;
@@ -73,12 +79,7 @@ button { color: inherit; }
 .shell { max-width: 1480px; margin: auto; padding: 26px 34px 32px; }
 header { display: flex; justify-content: space-between; align-items: center; gap: 20px;
   padding-bottom: 19px; border-bottom: 1px solid var(--line); }
-.brand { display: flex; gap: 13px; align-items: center; }
-.brand-mark { width: 43px; height: 43px; border-radius: 10px; background: #ffb16d;
-  display: grid; place-items: center; color: #0d1724; font-size: 17px; font-weight: 750; }
-h1 { margin: 0; font-size: 17px; letter-spacing: .12em; font-weight: 750; }
-.sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
-.brand h1, .brand .sub { color: #ffb16d; }
+.brand h1 { margin: 0; color: #ffb16d; font-size: 15px; letter-spacing: .08em; font-weight: 750; }
 .top-right { color: var(--muted); text-align: right; font-size: 11px; }
 .prototype { color: #f2d9bc; border: 1px solid #6a4a2f; border-radius: 5px;
   padding: 7px 10px; white-space: nowrap; background: rgba(118, 91, 66, 0.38); font-weight: 750; letter-spacing: .04em; }
@@ -91,6 +92,8 @@ h1 { margin: 0; font-size: 17px; letter-spacing: .12em; font-weight: 750; }
   font-size: 12px; letter-spacing: .08em; font-weight: 750; color: #ffb16d; }
 .info { margin-left: auto; color: var(--muted); border: 1px solid #475d78;
   border-radius: 4px; width: 18px; height: 18px; text-align: center; }
+.profile-card .step { position: relative; justify-content: center; }
+.profile-card .info { position: absolute; right: 0; }
 .info:focus-visible, button:focus-visible, input:focus-visible {
   outline: 3px solid #d47734; outline-offset: 3px;
 }
@@ -130,27 +133,19 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .detection-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: #09131f; }
 .detection-title { color: var(--ink); font-size: 11px; font-weight: 700; }
 .detection-viewport { display: flex; justify-content: center; width: 100%; margin-top: 8px; }
-.detection-stage { position: relative; flex: none; max-width: 100%; max-height: 300px; overflow: hidden; background: #0b1521; }
+.detection-viewport[hidden] { display: none; }
+.detection-stage { position: relative; flex: none; max-width: 100%; overflow: hidden; background: #0b1521;
+  width: min(100%, calc(var(--capture-media-height) * var(--frame-aspect, 1))); }
 .detection-image { display: block; width: 100%; height: 100%; object-fit: contain; }
-.detection-viewport.scanning #detectionImage { animation: grayscale-reveal 5s ease-out both; }
-.detection-viewport.detected #detectionImage { filter: grayscale(1); }
-.detection-color-image { position: absolute; inset: 0; opacity: 0; clip-path: inset(0 100% 0 0); }
-.detection-viewport.detected .detection-color-image { opacity: 1; }
-.detection-overlay, .detection-sweep { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.detection-overlay { opacity: 0; }
-.detection-viewport.detected .detection-overlay { animation: camera-highlight .35s ease-out both; }
-.detection-overlay line, .detection-overlay rect, .detection-overlay circle { fill: none; stroke: #ff861c; stroke-width: .8; vector-effect: non-scaling-stroke; }
-.detection-overlay .person-box { stroke-width: 1.4; }
-.detection-overlay .camera-body { fill: #ff861c; stroke-width: .5; }
+.detection-image[hidden] { display: none; }
+.detection-sweep { position: absolute; inset: 0; width: 100%; pointer-events: none; }
 .detection-sweep { top: 0; bottom: auto; height: 2px; opacity: 0; background: #ff2638; box-shadow: 0 0 8px 3px rgba(255, 38, 56, .8); }
-.detection-viewport.scanning .detection-sweep { animation: person-scan 5s linear both; }
-@keyframes grayscale-reveal { from { filter: grayscale(0); } to { filter: grayscale(1); } }
-@keyframes camera-highlight { from { opacity: 0; } to { opacity: 1; } }
+.detection-viewport.scanning .detection-sweep { animation: person-scan 2s linear infinite; }
 @keyframes person-scan {
-  0% { transform: translateY(0); opacity: 0; }
+  0% { top: 0; opacity: 0; }
   8% { opacity: 1; }
   92% { opacity: 1; }
-  100% { transform: translateY(var(--scan-distance)); opacity: .75; }
+  100% { top: 100%; opacity: .75; }
 }
 .detection-status { margin-top: 6px; color: var(--muted); font-size: 10px; }
 .upload-submit { margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 5px; background: var(--accent); color: #20150c; font-weight: 700; cursor: pointer; }
@@ -158,10 +153,39 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .upload-status { margin-top: 9px; font-size: 11px; color: var(--muted); }
 .analysis-card { grid-column: 1 / -1; }
 .result-title { color: var(--muted); font-size: 11px; letter-spacing: .1em; margin-bottom: 12px; font-weight: 750; }
-.result-title.measurements-title { color: #ffb16d; }
 .parameters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .parameter { display: grid; grid-template-columns: 25px 1fr; gap: 7px; align-items: center;
   min-height: 58px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); }
+.morphology-figure { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 14px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.morphology-figure[hidden] { display: none; }
+.morphology-figure-stage { position: relative; justify-self: center; max-width: 100%; overflow: hidden; background: #09131f;
+  width: min(100%, calc(var(--capture-media-height) * var(--frame-aspect, 1))); }
+.morphology-figure-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.morphology-figure-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.morphology-figure-stage line { stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.morphology-figure-stage circle { stroke: #08111b; stroke-width: .8; vector-effect: non-scaling-stroke; }
+.morphology-figure-stage line, .morphology-figure-stage circle { animation: segment-reveal .4s ease both; }
+.morphology-figure-stage line:nth-child(3), .morphology-figure-stage circle { animation-delay: .15s; }
+.morphology-figure-stage line:nth-child(4), .morphology-figure-stage line:nth-child(5) { animation-delay: .3s; }
+.morphology-figure-stage line:nth-child(6), .morphology-figure-stage line:nth-child(7) { animation-delay: .5s; }
+.morphology-figure-stage line:nth-child(8), .morphology-figure-stage line:nth-child(9) { animation-delay: .7s; }
+.morphology-figure-stage line:nth-child(10), .morphology-figure-stage line:nth-child(11) { animation-delay: .9s; }
+@keyframes segment-reveal { from { opacity: 0; } to { opacity: 1; } }
+.morphology-shoulders { stroke: var(--accent); }
+.morphology-hips { stroke: var(--cyan); }
+.morphology-torso { stroke: var(--green); }
+.morphology-upper-leg { stroke: var(--coral); }
+.morphology-lower-leg { stroke: var(--amber); }
+.morphology-upper-arm { stroke: #b6a5ed; }
+.morphology-lower-arm { stroke: #8fb8ff; }
+.morphology-landmark { fill: var(--text); }
+.morphology-figure-legend { display: grid; gap: 8px; }
+.morphology-figure-heading { grid-column: 1 / -1; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .08em; }
+.morphology-segment { display: grid; grid-template-columns: 12px 84px max-content; justify-content: start; gap: 7px; align-items: center; min-width: 0; font-size: 14px; }
+.morphology-segment i { width: 10px; height: 3px; background: var(--segment-color); }
+.morphology-segment span { color: var(--muted); }
+.morphology-segment output { color: var(--ink); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.morphology-figure-note { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .movement-figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .movement-row { min-width: 0; overflow: hidden; border: 1px solid #2c3b50; border-radius: 14px; background: #0b1523; }
 .movement-row svg { width: 100%; display: block; }
@@ -196,6 +220,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .studio-card-copy output { color: #ffb16d; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .studio-card-copy output b { font-size: 20px; font-weight: 550; letter-spacing: -.04em; }
 .studio-card-copy output small { font-size: 13px; color: inherit; margin-left: 5px; }
+.studio-card-copy .angle-unit { position: relative; top: -.25em; margin-left: 1px; }
 .studio-range { color: #90a5bf; font-size: 11px; grid-column: 1 / -1; }
 .studio-delta { color: #a4c6bf; font-size: 11px; grid-column: 1 / -1; }
 .studio-hero { margin-top: 24px; border: 1px solid #31445e; border-radius: 16px; overflow: hidden; background: #0b1523; }
@@ -228,6 +253,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .studio-legend span:nth-child(2) i { background: #ffb16d; }
 #seatAnimationStatus { padding: 0 28px 20px; color: #a6b8ce; font-size: 12px; min-height: 42px; }
 .studio-details { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 28px; padding-top: 26px; border-top: 1px solid #2b3c53; }
+.studio-details .studio-reference-schema { grid-row: span 2; margin: 0; }
+.studio-details .studio-reference-schema svg { max-height: 580px; }
 .studio-details h3 { font-size: 20px; font-weight: 550; margin: 8px 0; }
 .studio-details p { color: #a5b7cd; font-size: 12px; line-height: 1.8; }
 .studio-details b { color: #d7e5f7; }
@@ -255,6 +282,50 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .foot { margin-top: 20px; display: flex; justify-content: space-between; gap: 15px;
   color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 13px; }
 .foot strong { color: var(--coral); font-weight: 750; }
+.screen-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.screen-nav button { border: 1px solid var(--line); background: var(--panel2); border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+.screen-nav button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #35271f; }
+.capture-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, .7fr); gap: 12px; align-items: start; }
+.capture-layout > .left { align-self: center; }
+.capture-layout[hidden], [data-studio-view][hidden] { display: none; }
+.camera-details { color: var(--muted); font-size: 11px; margin-top: 8px; }
+.camera-details summary { cursor: pointer; }
+@media (min-width: 900px) and (min-height: 620px) {
+  .shell { max-width: none; padding: 12px 20px; }
+  header { padding-bottom: 8px; }
+  .layout { display: block; margin-top: 10px; }
+  .card { padding: 12px; }
+  .choice { min-height: 65px; padding: 6px 3px; }
+  .body-types .choice { min-height: 52px; padding: 4px; }
+  #sourceVideo, #decodedVideoPreview { max-height: var(--capture-media-height); }
+  .morphology-figure { margin-top: 6px; padding-top: 6px; gap: 6px; }
+  .morphology-figure-legend { gap: 4px; }
+  #seatStudio { padding: 14px 18px; }
+  #seatStudio[data-active-screen="animation"] .studio-heading,
+  #seatStudio[data-active-screen="reference"] .studio-heading { display: none; }
+  .studio-heading h2 { font-size: 22px; margin: 3px 0; }
+  .studio-heading p { font-size: 11px; }
+  .movement-figures { gap: 10px; }
+  .movement-row svg { height: min(25vh, 185px); }
+  .studio-card-heading { padding: 8px 12px 0; }
+  .studio-card-copy { padding: 0 12px 10px; gap: 3px; }
+  .studio-hero { margin-top: 8px; }
+  .studio-hero-top { padding: 8px 16px; }
+  .studio-hero-top h3 { font-size: 17px; }
+  .studio-play { padding: 8px 12px; }
+  .studio-timeline { padding: 0 16px; font-size: 12px; }
+  .studio-timeline span { padding: 4px 0; }
+  .studio-stage > svg { height: max(180px, calc(100vh - 385px)); max-height: none; }
+  .studio-stage-label { top: 8px; font-size: 11px; }
+  .studio-live { top: 38px; gap: 6px; font-size: 13px; }
+  .studio-legend { padding: 6px 16px; }
+  #seatAnimationStatus { padding: 0 16px 8px; min-height: 0; }
+  .studio-details { margin-top: 8px; padding-top: 8px; }
+  .studio-details p { line-height: 1.5; }
+  .studio-details .studio-reference-schema svg { max-height: max(220px, calc(100vh - 250px)); }
+  .foot { margin-top: 8px; padding-top: 6px; }
+}
+@media (max-width: 899px) { .capture-layout { grid-template-columns: 1fr; } }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
 }
@@ -264,15 +335,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   header { align-items: flex-start; }
   .top-right { display: none; }
   .movement-figures { grid-template-columns: 1fr; }
+  .morphology-figure { grid-template-columns: 1fr; }
   .profiles, .body-types { gap: 5px; }
   .choice { padding-left: 3px; padding-right: 3px; }
   .foot { display: block; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
-  .detection-viewport.scanning #detectionImage { animation: none; filter: grayscale(1); }
-  .detection-viewport.detected .detection-overlay { animation: none; opacity: 1; }
   .detection-viewport.scanning .detection-sweep { animation: none; opacity: 0; }
+  .morphology-figure-stage line, .morphology-figure-stage circle { animation: none; }
 }
 </style>
 </head>
@@ -280,115 +351,117 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 <div class="shell">
   <header>
     <div class="brand">
-      <div class="brand-mark">FIT</div>
-      <div><h1>DRIVER FIT LAB</h1><div class="sub">Morphology summary and seating configuration preview</div></div>
+      <h1>MORPHOLOGY SUMMARY AND SEATING CONFIGURATION PREVIEW</h1>
     </div>
     <div class="top-right"><span class="prototype">PROTOTYPE · NO SEAT ACTUATION</span></div>
   </header>
 
+  <nav class="screen-nav" aria-label="HMI views">
+    <button type="button" data-screen="capture" aria-pressed="true">Video &amp; profile</button>
+    <button type="button" data-screen="adjustments" aria-pressed="false">Seat adjustments</button>
+    <button type="button" data-screen="animation" aria-pressed="false">Seat animation</button>
+    <button type="button" data-screen="reference" aria-pressed="false">Reference details</button>
+  </nav>
   <main class="layout">
-    <div class="card analysis-card">
+    <div id="captureScreen" class="capture-layout">
+    <div class="card">
       <h2 class="step">LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE</h2>
       <div class="upload-grid">
         <div class="upload-view">
           <label for="videoFile">Driver video</label>
           <input id="videoFile" type="file" accept="video/*">
           <div id="videoFileStatus" class="upload-status">No video selected.</div>
-          <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;max-height:300px" aria-label="Uploaded video preview"></video>
-          <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;max-height:300px;object-fit:contain">
-          <small>A complete near-camera frame is accepted after two consecutive checks of the same person. If no close, complete frame is found, the best stable full-body frame is scanned at the end.</small>
+          <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;object-fit:contain" aria-label="Uploaded video preview"></video>
+          <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;object-fit:contain">
         </div>
         <div class="detection-panel">
-          <div class="detection-title">Detecting Person</div>
+          <div class="detection-title">Detecting Person / selected frame</div>
           <div id="detectionViewport" class="detection-viewport" aria-label="Simulated person detection animation">
             <div id="detectionStage" class="detection-stage">
-              <img id="detectionImage" class="detection-image" alt="">
-              <img id="detectionColorImage" class="detection-image detection-color-image" alt="">
-              <svg class="detection-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                <g class="camera-links">
-                  <line id="cameraToTopLeft"/>
-                  <line id="cameraToTopRight"/>
-                  <line id="cameraToBottomRight"/>
-                  <line id="cameraToBottomLeft"/>
-                </g>
-                <rect id="detectedPersonBox" class="person-box"/>
-                <circle cx="8" cy="90" r="2.6"/>
-                <rect class="camera-body" x="4" y="84" width="8" height="4"/>
-              </svg>
+              <img id="detectionImage" class="detection-image" hidden alt="">
+              <canvas id="detectionVideoFrame" class="detection-image" hidden aria-label="Playing video mirrored during person detection"></canvas>
               <div class="detection-sweep" aria-hidden="true"></div>
             </div>
+          </div>
+          <div id="morphologyFigure" class="morphology-figure" hidden>
+            <div class="morphology-figure-heading">DETECTED BODY / ESTIMATED SEGMENTS</div>
+            <div id="morphologyFigureStage" class="morphology-figure-stage">
+              <img id="morphologyFigureImage" alt="Selected video frame showing detected driver and morphology keypoints">
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Overlay of detected body landmarks used for segment estimates">
+                <g fill="none">
+                  <line id="morphologyShoulders" class="morphology-shoulders"/>
+                  <line id="morphologyHips" class="morphology-hips"/>
+                  <line id="morphologyTorso" class="morphology-torso"/>
+                  <line id="morphologyUpperLeft" class="morphology-upper-leg"/>
+                  <line id="morphologyUpperRight" class="morphology-upper-leg"/>
+                  <line id="morphologyLowerLeft" class="morphology-lower-leg"/>
+                  <line id="morphologyLowerRight" class="morphology-lower-leg"/>
+                  <line id="morphologyUpperArmLeft" class="morphology-upper-arm"/>
+                  <line id="morphologyUpperArmRight" class="morphology-upper-arm"/>
+                  <line id="morphologyLowerArmLeft" class="morphology-lower-arm"/>
+                  <line id="morphologyLowerArmRight" class="morphology-lower-arm"/>
+                </g>
+                <g aria-hidden="true">
+                  <circle id="morphologyPointLeftShoulder" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightShoulder" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointLeftElbow" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightElbow" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointLeftWrist" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightWrist" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointLeftHip" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightHip" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointLeftKnee" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightKnee" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointLeftAnkle" class="morphology-landmark" r=".65"/>
+                  <circle id="morphologyPointRightAnkle" class="morphology-landmark" r=".65"/>
+                </g>
+              </svg>
+            </div>
+            <div class="morphology-figure-legend">
+              <div class="morphology-segment" style="--segment-color:var(--accent)"><i></i><span>Shoulders</span><output id="figureShoulderLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:var(--cyan)"><i></i><span>Hips</span><output id="figureHipLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:var(--green)"><i></i><span>Torso</span><output id="figureTorsoLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:var(--coral)"><i></i><span>Upper legs</span><output id="figureUpperLegLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:var(--amber)"><i></i><span>Lower legs</span><output id="figureLowerLegLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:#b6a5ed"><i></i><span>Upper arms</span><output id="figureUpperArmLength">—</output></div>
+              <div class="morphology-segment" style="--segment-color:#8fb8ff"><i></i><span>Lower arms</span><output id="figureLowerArmLength">—</output></div>
+            </div>
+            <div class="morphology-figure-note">2D landmarks; lengths are uncalibrated estimates, not independent 3D anatomical measurements.</div>
           </div>
           <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a high-confidence full-body frame.</div>
         </div>
       </div>
-      <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-      <p class="under-cta">Mirror position: X 74 cm, Y -85 cm, Z 87 cm; camera height above ground: 115 cm. Starting camera pose: pitch −10° downward, roll 0°. Portrait video uses the reported 2048 × 1280 camera specs (98.22° horizontal, 50.34° vertical), assuming a 90° anticlockwise rotation and full-frame resize without cropping. Pose and lens distortion are not calibrated. No vehicle commands.</p>
     </div>
     <section class="left">
-      <div class="card">
-        <h2 class="step">DRIVER DIMENSIONS <span class="info" title="The default simulated camera model is not a measured physical height.">i</span></h2>
-        <div class="height-line"><output id="heightValue">178</output><span id="heightUnitLabel">cm · simulated camera model</span></div>
-        <div class="range-wrap"><input id="height" type="range" min="80" max="260" value="178" aria-label="Estimated driver height in centimetres">
-          <div class="range-labels"><span>80</span><span>125</span><span>170</span><span>215</span><span>260 cm</span></div></div>
-      </div>
-
-      <div class="card">
+      <div class="card profile-card">
         <h2 class="step">SIZE CLASS <span class="info" title="Illustrative height bands. Replace with validated population and vehicle-specific calibration.">i</span></h2>
         <div class="profiles" role="group" aria-label="Driver size profile">
-          <button class="choice" data-size="small"><span class="person-icon">S</span><strong>Small</strong><small>≤165 cm</small></button>
-          <button class="choice active" data-size="medium"><span class="person-icon">M</span><strong>Medium</strong><small>166–185 cm</small></button>
-          <button class="choice" data-size="large"><span class="person-icon">L</span><strong>Large</strong><small>≥186 cm</small></button>
+          <button class="choice" data-size="small"><span class="person-icon">S</span><strong>Small</strong><small>&lt;160 cm</small></button>
+          <button class="choice active" data-size="medium"><span class="person-icon">M</span><strong>Medium</strong><small>160–180 cm</small></button>
+          <button class="choice" data-size="large"><span class="person-icon">L</span><strong>Large</strong><small>&gt;180 cm</small></button>
         </div>
+        <p class="under-cta">Selecting a size manually uses a representative height; a detected torso is required for a backrest estimate.</p>
         <h2 class="step" style="margin-top:17px">BUILD CATEGORY</h2>
         <div class="body-types" role="group" aria-label="Body morphology profile">
           <button class="choice" data-build="athletic"><span class="person-icon">◇</span><strong>Athletic</strong></button>
           <button class="choice active" data-build="average"><span class="person-icon">◯</span><strong>Average</strong></button>
           <button class="choice" data-build="robust"><span class="person-icon">⬭</span><strong>Robust</strong></button>
         </div>
+        <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
+        <details class="camera-details"><summary>Camera and frame selection assumptions (not calibrated)</summary><p>A complete near-camera frame is accepted after two consecutive checks of the same person. If none is found, the best stable full-body frame is selected at the end.</p><p>Mirror position: X 74 cm, Y -85 cm, Z 87 cm; camera height above ground: 115 cm. Model pose: yaw +93° from forward toward vehicle-left, effective pitch −11.5°, roll −0.1°; yaw direction is unverified. Pitch and roll were fitted to seven videos of three people; the effective pitch differs from the user-supplied −15°. These are not measured physical angles. Estimated intrinsics: fx 830 px, fy 1078 px, cx 964 px, cy 544 px at 1928 × 1088. Portrait video assumes a 90° anticlockwise rotation and resize to frame dimensions without cropping. Camera pose and lens distortion are not calibrated. No vehicle commands.</p></details>
       </div>
 
     </section>
 
-    <section class="right">
-      <div class="card">
-        <div class="result-title measurements-title">SIMULATED CAMERA ESTIMATE · NOT CALIBRATED</div>
-        <div class="parameters">
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Estimated height</span><span class="param-value"><span id="measureHeight">—</span><small>cm</small></span></div>
-          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Shoulder width</span><span class="param-value"><span id="measureShoulder">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">↔</span><span class="param-name">Hip width</span><span class="param-value"><span id="measureHip">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">⌂</span><span class="param-name">Face-to-ankle span</span><span class="param-value"><span id="measureFace">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Torso length</span><span class="param-value"><span id="measureTorso">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Total leg length</span><span class="param-value"><span id="measureLegs">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Upper leg length</span><span class="param-value"><span id="measureUpperLeg">—</span><small>cm · simulated</small></span></div>
-          <div class="parameter"><span class="param-icon">↕</span><span class="param-name">Lower leg length</span><span class="param-value"><span id="measureLowerLeg">—</span><small>cm · simulated</small></span></div>
-        </div>
-        <div id="measurementNote" class="under-cta">Camera parameters are simulated; physical height cannot be established from the video alone.</div>
-      </div>
-      <div class="card">
-        <div class="result-title">MODEL PERFORMANCE</div>
-        <div class="parameters">
-          <div class="parameter">
-            <span class="param-icon">◎</span>
-            <span class="param-name">Morphology estimation confidence</span>
-            <span class="param-value"><span id="morphologyConfidence">—</span><small>pose keypoint confidence</small></span>
-          </div>
-          <div class="parameter">
-            <span class="param-icon">◎</span>
-            <span class="param-name">Face detection confidence</span>
-            <span class="param-value"><span id="faceConfidence">—</span><small>YuNet face score</small></span>
-          </div>
-        </div>
-        <div class="under-cta">Model confidence scores indicate detection certainty; they are not measurement-accuracy guarantees.</div>
-      </div>
-    </section>
-    <p id="seatStudioUnavailable" class="analysis-card" role="status" hidden>Seat preview unavailable: the supported height range is 120–230 cm.</p>
+    </div>
+    <p id="seatModelUnavailable" class="analysis-card" role="status" hidden>Seat movement preview is unavailable outside the supported height input range.</p>
     <section id="seatStudio" class="card analysis-card" aria-label="Seat configuration vector simulation">
       <noscript>Enable JavaScript to display the seat simulation.</noscript>
     </section>
   </main>
   <footer class="foot">
-    <span><strong>DEMO ONLY:</strong> parameter offsets are placeholders, not ergonomic or safety recommendations.</span>
-    <span>Requires vehicle-specific calibration before real use.</span>
+    <span><strong>DEMO ONLY:</strong> estimated dimensions are not calibrated physical measurements.</span>
+    <span>No vehicle commands are sent.</span>
   </footer>
 </div>
 <script src="/assets/seat-studio.js"></script>
@@ -396,45 +469,47 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 <script>
 (() => {
   SeatStudio.mount();
-  const height = document.getElementById("height");
   const sizeButtons = [...document.querySelectorAll("[data-size]")];
   const buildButtons = [...document.querySelectorAll("[data-build]")];
-  const references = {small: 158, medium: 178, large: 195};
-  let selectedSize = "medium";
-  let selectedBuild = "average";
+  const representativeHeights = {small: 158, medium: 178, large: 195};
+  let seatAvailable = true;
+  let activeScreen = "capture";
+  function showScreen(screen) {
+    activeScreen = screen;
+    document.getElementById("captureScreen").hidden = screen !== "capture";
+    document.getElementById("seatStudio").dataset.activeScreen = screen;
+    document.getElementById("seatStudio").hidden = screen === "capture" || !seatAvailable;
+    document.getElementById("seatModelUnavailable").hidden = screen === "capture" || seatAvailable;
+    document.querySelectorAll("[data-studio-view]").forEach(panel => {
+      panel.hidden = panel.dataset.studioView !== screen;
+    });
+    document.querySelectorAll("[data-screen]").forEach(button => {
+      button.setAttribute("aria-pressed", String(button.dataset.screen === screen));
+    });
+  }
+  document.querySelectorAll("[data-screen]").forEach(button =>
+    button.addEventListener("click", () => showScreen(button.dataset.screen))
+  );
 
-  const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
-  const band = value => value < 166 ? "small" : value <= 185 ? "medium" : "large";
+  function updateSeat(height, torsoCm = null) {
+    seatAvailable = SeatStudio.supports(height);
+    if (seatAvailable) SeatStudio.update(height, torsoCm);
+    showScreen(activeScreen);
+  }
 
-  function selectSize(size, updateHeight) {
-    selectedSize = size;
+  function selectSize(size) {
     sizeButtons.forEach(button => button.classList.toggle("active", button.dataset.size === size));
-    if (updateHeight) height.value = references[size];
-    render();
   }
   function selectBuild(build) {
-    selectedBuild = build;
     buildButtons.forEach(button => button.classList.toggle("active", button.dataset.build === build));
-    render();
-  }
-  function render() {
-    const h = Number(height.value);
-    document.getElementById("heightValue").value = h;
-    const suggested = band(h);
-    if (suggested !== selectedSize) {
-      selectedSize = suggested;
-      sizeButtons.forEach(button => button.classList.toggle("active", button.dataset.size === selectedSize));
-    }
-
-    const previewAvailable = h >= 120 && h <= 230;
-    document.getElementById("seatStudio").hidden = !previewAvailable;
-    document.getElementById("seatStudioUnavailable").hidden = previewAvailable;
-    if (previewAvailable) SeatStudio.update(h);
   }
 
-  height.addEventListener("input", () => selectSize(band(Number(height.value)), false));
-  sizeButtons.forEach(button => button.addEventListener("click", () => selectSize(button.dataset.size, true)));
+  sizeButtons.forEach(button => button.addEventListener("click", () => {
+    selectSize(button.dataset.size);
+    updateSeat(representativeHeights[button.dataset.size]);
+  }));
   buildButtons.forEach(button => button.addEventListener("click", () => selectBuild(button.dataset.build)));
+  updateSeat(representativeHeights.medium);
   const imageView = {
     image: null,
     dataUrl: null
@@ -442,127 +517,165 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   const detectionViewport = document.getElementById("detectionViewport");
   const detectionStage = document.getElementById("detectionStage");
   const detectionImage = document.getElementById("detectionImage");
-  const detectionColorImage = document.getElementById("detectionColorImage");
+  const detectionVideoFrame = document.getElementById("detectionVideoFrame");
   const detectionStatus = document.getElementById("detectionStatus");
-  let detectionStatusTimers = [];
   const status = document.getElementById("profileStatus");
-  const fmtCm = value => Number.isFinite(value) ? value.toFixed(1) : "n/a";
-  function clearDetectionStatusTimers() {
-    detectionStatusTimers.forEach(timer => window.clearTimeout(timer));
-    detectionStatusTimers = [];
-  }
-  function sizeDetectionStage() {
-    const aspectRatio = imageView.image.naturalWidth / imageView.image.naturalHeight;
-    detectionStage.style.width =
-      `${Math.min(detectionViewport.clientWidth, 300 * aspectRatio)}px`;
-    detectionStage.style.aspectRatio =
-      `${imageView.image.naturalWidth} / ${imageView.image.naturalHeight}`;
-  }
-  function prepareDetectionView() {
-    clearDetectionStatusTimers();
-    detectionViewport.classList.remove("scanning");
-    detectionViewport.classList.remove("detected");
-    sizeDetectionStage();
-    detectionColorImage.style.clipPath = "";
-    ["x", "y", "width", "height"].forEach(attribute =>
-      document.getElementById("detectedPersonBox").removeAttribute(attribute)
-    );
-    ["cameraToTopLeft", "cameraToTopRight", "cameraToBottomRight", "cameraToBottomLeft"]
-      .forEach(id => {
-        const line = document.getElementById(id);
-        ["x1", "y1", "x2", "y2"].forEach(attribute => line.removeAttribute(attribute));
-      });
-    detectionStatus.textContent = "Full-body frame captured. Starting automatic analysis.";
-  }
-  function startDetectionAnimation(signal) {
-    clearDetectionStatusTimers();
-    sizeDetectionStage();
-    detectionViewport.classList.remove("detected", "scanning");
-    void detectionViewport.offsetWidth;
-    detectionViewport.classList.add("scanning");
-    detectionStatus.textContent = "Scanning image for a person…";
-    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? 0
-      : 5000;
-    return new Promise(resolve => {
-      const aborted = () => {
-        clearDetectionStatusTimers();
-        detectionViewport.classList.remove("scanning", "detected");
-        resolve();
-      };
-      signal.addEventListener("abort", aborted, {once: true});
-      detectionStatusTimers.push(window.setTimeout(() => {
-        signal.removeEventListener("abort", aborted);
-        detectionStatus.textContent = "Scan complete. Finalizing person detection…";
-        resolve();
-      }, duration));
-      detectionStatusTimers.push(window.setTimeout(() => {
-      detectionStatus.textContent = "Detecting person in the frontal image…";
-      }, 850));
-    });
-  }
-  function showDetectionBox(box) {
-    clearDetectionStatusTimers();
-    if (!box || !["x", "y", "width", "height"].every(
-      key => Number.isFinite(box[key])
-    ) || box.width <= 0 || box.height <= 0) {
-      throw new Error("The person detector returned an invalid bounding box.");
+  let mirrorVideo = null, mirrorRequest = null, mirrorSeekHandler = null, mirrorUsesVideoFrames = false;
+  function stopPlaybackMirror() {
+    if (mirrorVideo && mirrorRequest !== null) {
+      if (mirrorUsesVideoFrames) mirrorVideo.cancelVideoFrameCallback(mirrorRequest);
+      else cancelAnimationFrame(mirrorRequest);
     }
-    const x = box.x;
-    const y = box.y;
-    const right = x + box.width;
-    const bottom = y + box.height;
-    detectionColorImage.style.clipPath =
-      `inset(${y}% ${100 - right}% ${100 - bottom}% ${x}%)`;
-    const cameraX = 8;
-    const cameraY = 90;
-    document.getElementById("detectedPersonBox").setAttribute(
-      "x", x.toFixed(3)
-    );
-    document.getElementById("detectedPersonBox").setAttribute(
-      "y", y.toFixed(3)
-    );
-    document.getElementById("detectedPersonBox").setAttribute(
-      "width", box.width.toFixed(3)
-    );
-    document.getElementById("detectedPersonBox").setAttribute(
-      "height", box.height.toFixed(3)
-    );
-    [
-      ["cameraToTopLeft", x, y],
-      ["cameraToTopRight", right, y],
-      ["cameraToBottomRight", right, bottom],
-      ["cameraToBottomLeft", x, bottom]
-    ].forEach(([id, cornerX, cornerY]) => {
+    if (mirrorVideo && mirrorSeekHandler) mirrorVideo.removeEventListener("seeked", mirrorSeekHandler);
+    mirrorVideo = null;
+    mirrorRequest = null;
+    mirrorSeekHandler = null;
+  }
+  function startPlaybackMirror(video) {
+    stopPlaybackMirror();
+    const context = detectionVideoFrame.getContext("2d");
+    if (!context || !video.videoWidth || !video.videoHeight) {
+      throw new Error("Mirrored video preview is unavailable.");
+    }
+    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+    detectionVideoFrame.width = Math.round(video.videoWidth * scale);
+    detectionVideoFrame.height = Math.round(video.videoHeight * scale);
+    detectionStage.style.setProperty("--frame-aspect", video.videoWidth / video.videoHeight);
+    detectionStage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    detectionImage.hidden = true;
+    detectionVideoFrame.hidden = false;
+    detectionViewport.hidden = false;
+    detectionViewport.classList.add("scanning");
+    detectionStatus.textContent = "Mirroring video while checking for a complete person…";
+    mirrorVideo = video;
+    mirrorUsesVideoFrames = typeof video.requestVideoFrameCallback === "function" &&
+      typeof video.cancelVideoFrameCallback === "function";
+    const draw = () => {
+      if (video.readyState >= 2) {
+        context.drawImage(video, 0, 0, detectionVideoFrame.width, detectionVideoFrame.height);
+      }
+    };
+    const next = () => {
+      if (mirrorVideo !== video) return;
+      draw();
+      mirrorRequest = mirrorUsesVideoFrames
+        ? video.requestVideoFrameCallback(next)
+        : requestAnimationFrame(next);
+    };
+    mirrorSeekHandler = draw;
+    video.addEventListener("seeked", mirrorSeekHandler);
+    next();
+  }
+  window.addEventListener("pagehide", stopPlaybackMirror);
+  detectionImage.addEventListener("load", () => {
+    if (!detectionImage.naturalWidth || !detectionImage.naturalHeight) return;
+    detectionStage.style.setProperty("--frame-aspect", detectionImage.naturalWidth / detectionImage.naturalHeight);
+    detectionStage.style.aspectRatio = `${detectionImage.naturalWidth} / ${detectionImage.naturalHeight}`;
+  });
+  const fmtCm = value => Number.isFinite(value) ? value.toFixed(1) : "n/a";
+  function renderMorphologyFigure(dataUrl, keypoints, dimensions) {
+    const figure = document.getElementById("morphologyFigure");
+    const stage = document.getElementById("morphologyFigureStage");
+    const image = document.getElementById("morphologyFigureImage");
+    const point = index => {
+      const location = keypoints?.[index];
+      return location && Number.isFinite(location.x) && Number.isFinite(location.y)
+        ? location : null;
+    };
+    const center = (first, second) => first && second
+      ? {x: (first.x + second.x) / 2, y: (first.y + second.y) / 2}
+      : null;
+    const endpoints = {
+      morphologyShoulders: [point(5), point(6)],
+      morphologyHips: [point(11), point(12)],
+      morphologyTorso: [center(point(5), point(6)), center(point(11), point(12))],
+      morphologyUpperLeft: [point(11), point(13)],
+      morphologyUpperRight: [point(12), point(14)],
+      morphologyLowerLeft: [point(13), point(15)],
+      morphologyLowerRight: [point(14), point(16)],
+      morphologyUpperArmLeft: [point(5), point(7)],
+      morphologyUpperArmRight: [point(6), point(8)],
+      morphologyLowerArmLeft: [point(7), point(9)],
+      morphologyLowerArmRight: [point(8), point(10)],
+    };
+    for (const [id, pair] of Object.entries(endpoints)) {
       const line = document.getElementById(id);
-      line.setAttribute("x1", cameraX);
-      line.setAttribute("y1", cameraY);
-      line.setAttribute("x2", cornerX);
-      line.setAttribute("y2", cornerY);
-    });
-    const sweep = detectionStage.querySelector(".detection-sweep");
-    sweep.style.setProperty(
-      "--scan-distance",
-      `${detectionStage.getBoundingClientRect().height}px`
-    );
-    detectionViewport.classList.remove("scanning");
-    detectionViewport.classList.add("detected");
-    void detectionViewport.offsetWidth;
-    detectionStatus.textContent = "Person detected. Bounding box shown in orange.";
+      const visible = Boolean(pair[0] && pair[1]);
+      line.style.display = visible ? "" : "none";
+      if (visible) {
+        line.setAttribute("x1", pair[0].x);
+        line.setAttribute("y1", pair[0].y);
+        line.setAttribute("x2", pair[1].x);
+        line.setAttribute("y2", pair[1].y);
+      }
+    }
+    for (const [id, index] of Object.entries({
+      morphologyPointLeftShoulder: 5,
+      morphologyPointRightShoulder: 6,
+      morphologyPointLeftElbow: 7,
+      morphologyPointRightElbow: 8,
+      morphologyPointLeftWrist: 9,
+      morphologyPointRightWrist: 10,
+      morphologyPointLeftHip: 11,
+      morphologyPointRightHip: 12,
+      morphologyPointLeftKnee: 13,
+      morphologyPointRightKnee: 14,
+      morphologyPointLeftAnkle: 15,
+      morphologyPointRightAnkle: 16,
+    })) {
+      const marker = document.getElementById(id);
+      const location = point(index);
+      marker.style.display = location ? "" : "none";
+      if (location) {
+        marker.setAttribute("cx", location.x);
+        marker.setAttribute("cy", location.y);
+      }
+    }
+    stage.style.setProperty("--frame-aspect", imageView.image.naturalWidth / imageView.image.naturalHeight);
+    stage.style.aspectRatio = `${imageView.image.naturalWidth} / ${imageView.image.naturalHeight}`;
+    image.src = dataUrl;
+    for (const [id, key] of Object.entries({
+      figureShoulderLength: "shoulder_width",
+      figureHipLength: "hip_width",
+      figureTorsoLength: "torso_length",
+      figureUpperLegLength: "upper_leg_length",
+      figureLowerLegLength: "lower_leg_length",
+      figureUpperArmLength: "upper_arm_length",
+      figureLowerArmLength: "lower_arm_length",
+    })) {
+      document.getElementById(id).textContent = `${fmtCm(dimensions?.[key])} cm`;
+    }
+    figure.hidden = false;
+    return [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].some(point);
   }
   VideoCapture.mount({
-    async captured(dataUrl, timestamp, signal) {
+    playback(video) {
+      startPlaybackMirror(video);
+    },
+    progress(dataUrl, timestamp) {
+      stopPlaybackMirror();
+      detectionViewport.hidden = false;
+      detectionViewport.classList.add("scanning");
+      detectionVideoFrame.hidden = true;
+      detectionImage.hidden = false;
+      detectionImage.src = dataUrl;
+      detectionStatus.textContent = `Checking sampled frame at ${timestamp.toFixed(2)} s…`;
+    },
+    failed() {
+      stopPlaybackMirror();
+      detectionViewport.classList.remove("scanning");
+    },
+    async captured(dataUrl, timestamp, signal, sampledPreview = false) {
     const image = new Image();
     image.src = dataUrl;
     await image.decode();
     signal.throwIfAborted();
     imageView.image = image;
     imageView.dataUrl = dataUrl;
-    detectionImage.src = dataUrl;
-    detectionColorImage.src = dataUrl;
-    prepareDetectionView();
     status.textContent = `Analyzing the closest complete frame captured at ${timestamp.toFixed(2)} s…`;
-    const scanAnimation = startDetectionAnimation(signal);
+    detectionStatus.textContent = sampledPreview
+      ? `Analyzing sampled frame at ${timestamp.toFixed(2)} s…`
+      : `Mirroring video while analyzing selected frame at ${timestamp.toFixed(2)} s…`;
     try {
       const response = await fetch("/analyze", {
         method: "POST",
@@ -575,79 +688,48 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Image analysis failed.");
-      await scanAnimation;
       signal.throwIfAborted();
-      showDetectionBox(result.detection_bbox);
-      const h = result.height_cm;
-      height.value = String(clamp(Math.round(h), Number(height.min), Number(height.max)));
+      stopPlaybackMirror();
+      detectionViewport.classList.remove("scanning");
+      detectionViewport.hidden = true;
       const calibrated = result.calibration_mode === "vehicle_camera";
       const simulated = result.calibration_mode === "simulated_vehicle_camera";
-      document.querySelector(".measurements-title").textContent = calibrated
-        ? "CALIBRATED CAMERA HEIGHT"
-        : simulated
-          ? "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED"
-          : "REFERENCE-MARKER ESTIMATE";
-      document.getElementById("heightUnitLabel").textContent = calibrated
-        ? "cm · calibrated camera geometry"
-        : simulated
-          ? "cm · simulated camera model"
-          : "cm · reference marker";
-      selectSize(result.size_class, false);
+      selectSize(result.size_class);
       selectBuild(result.build_category);
-      render();
       const morphology = result.morphology_dimensions_cm;
-      document.getElementById("measureHeight").textContent = h.toFixed(1);
-      document.getElementById("measureShoulder").textContent =
-        fmtCm(morphology?.shoulder_width);
-      document.getElementById("measureHip").textContent =
-        fmtCm(morphology?.hip_width);
-      document.getElementById("measureFace").textContent =
-        fmtCm(result.morphology_reference_span_cm);
-      document.getElementById("measureTorso").textContent =
-        fmtCm(morphology?.torso_length);
-      document.getElementById("measureLegs").textContent =
-        fmtCm(morphology?.total_leg_length);
-      document.getElementById("measureUpperLeg").textContent =
-        fmtCm(morphology?.upper_leg_length);
-      document.getElementById("measureLowerLeg").textContent =
-        fmtCm(morphology?.lower_leg_length);
-      document.getElementById("morphologyConfidence").textContent =
-        `${(result.confidence * 100).toFixed(0)}%`;
-      document.getElementById("faceConfidence").textContent =
-        result.face_detection_confidence == null
-          ? "Unavailable"
-          : `${(result.face_detection_confidence * 100).toFixed(0)}%`;
-      document.getElementById("measurementNote").textContent = result.warnings.join(" ");
+      updateSeat(result.height_cm, morphology?.torso_length);
+      const hasLandmarks = renderMorphologyFigure(dataUrl, result.morphology_figure_keypoints, morphology);
+      detectionStatus.textContent = `${hasLandmarks ? "2D landmarks shown" : "No reliable pose landmarks available"}. Selected still: ${timestamp.toFixed(2)} s. ${
+        sampledPreview ? "Sampled preview only." : "Video plays independently."}`;
       status.textContent = calibrated
         ? `Calibrated camera height estimate complete at ${timestamp.toFixed(2)} s. Review the calibration and geometry residual before use.`
         : simulated
-          ? `Simulated camera estimate complete at ${timestamp.toFixed(2)} s. Review the mount-height sensitivity; this is not calibrated.`
+          ? `Simulated camera estimate complete at ${timestamp.toFixed(2)} s. This is not calibrated.`
           : `Reference-marker analysis complete at ${timestamp.toFixed(2)} s.`;
     } catch (error) {
-      detectionViewport.classList.remove("scanning", "detected");
-      clearDetectionStatusTimers();
+      stopPlaybackMirror();
+      detectionViewport.classList.remove("scanning");
       detectionStatus.textContent = signal.aborted ? "Video analysis interrupted." : error.message;
       throw error;
     }
     },
     reset() {
-      clearDetectionStatusTimers();
-      detectionViewport.classList.remove("scanning", "detected");
+      stopPlaybackMirror();
+      detectionViewport.classList.remove("scanning");
+      detectionViewport.hidden = false;
+      detectionVideoFrame.hidden = true;
+      detectionImage.hidden = true;
       detectionImage.removeAttribute("src");
-      detectionColorImage.removeAttribute("src");
-      document.querySelector(".measurements-title").textContent =
-        "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED";
-      document.getElementById("heightUnitLabel").textContent =
-        "cm · simulated camera model";
-      document.getElementById("measurementNote").textContent =
-        "Camera parameters are simulated; physical height cannot be established from the video alone.";
+      document.getElementById("morphologyFigure").hidden = true;
+      document.getElementById("morphologyFigureImage").removeAttribute("src");
+      const selectedSize = sizeButtons.find(button => button.classList.contains("active")).dataset.size;
+      updateSeat(representativeHeights[selectedSize]);
       detectionStatus.textContent = "Searching video for a high-confidence full-body frame…";
-      for (const id of ["measureHeight", "measureShoulder", "measureHip", "measureFace", "measureTorso", "measureLegs", "measureUpperLeg", "measureLowerLeg", "morphologyConfidence", "faceConfidence"]) {
+      for (const id of ["figureShoulderLength", "figureHipLength", "figureTorsoLength", "figureUpperArmLength", "figureLowerArmLength", "figureUpperLegLength", "figureLowerLegLength"]) {
         document.getElementById(id).textContent = "\u2014";
       }
     }
   });
-  render();
 })();
 </script>
 </body>
@@ -1311,12 +1393,20 @@ class _HmiHandler(BaseHTTPRequestHandler):
         build_category = (
             "athletic" if width_ratio < 0.32 else "average" if width_ratio < 0.43 else "robust"
         )
-        size_class = "small" if height_cm < 166 else "medium" if height_cm <= 185 else "large"
+        size_class = "small" if height_cm < 160 else "medium" if height_cm <= 180 else "large"
         image_height, image_width = image.shape[:2]
         box_left = max(0.0, min(float(image_width), front_pose.bounding_box.x1))
         box_top = max(0.0, min(float(image_height), front_pose.bounding_box.y1))
         box_right = max(box_left, min(float(image_width), front_pose.bounding_box.x2))
         box_bottom = max(box_top, min(float(image_height), front_pose.bounding_box.y2))
+        morphology_figure_keypoints = {
+          point.index: {
+            "x": round(point.x / image_width * 100, 4),
+            "y": round(point.y / image_height * 100, 4),
+          }
+          for point in front_pose.keypoints
+          if point.confidence >= Settings().keypoint_threshold
+        }
         morphology_proportions = None
         if frontal is not None:
           upper_leg_ratio = frontal.upper_leg_length_over_span
@@ -1328,6 +1418,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "shoulder_width_over_span": frontal.shoulder_width_over_span,
             "hip_width_over_span": frontal.hip_width_over_span,
             "torso_length_over_span": frontal.torso_length_over_span,
+            "upper_arm_length_over_span": frontal.upper_arm_length_over_span,
+            "lower_arm_length_over_span": frontal.lower_arm_length_over_span,
             "upper_leg_length_over_span": upper_leg_ratio,
             "lower_leg_length_over_span": lower_leg_ratio,
             "total_leg_length_over_span": (
@@ -1363,6 +1455,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "shoulder_width": "shoulder_width_over_span",
             "hip_width": "hip_width_over_span",
             "torso_length": "torso_length_over_span",
+            "upper_arm_length": "upper_arm_length_over_span",
+            "lower_arm_length": "lower_arm_length_over_span",
             "upper_leg_length": "upper_leg_length_over_span",
             "lower_leg_length": "lower_leg_length_over_span",
             "total_leg_length": "total_leg_length_over_span",
@@ -1410,12 +1504,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
             f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
                 "Morphology centimeters are image-space proportions scaled by the estimated person-box height; they are not independent 3D segment measurements.",
             "Build class is a rough bounding-box-width proxy and needs validation.",
-            "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+            "The seat movement preview is illustrative, not a validated comfort or driving recommendation.",
           ]
         elif simulated_demo:
           if camera_model.reported_diagonal_fov_deg is not None:
             intrinsics_warnings = [
-            f"SPEC-BASED INTRINSICS, NOT CALIBRATED: {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} pixels, {SIMULATED_HORIZONTAL_FOV_DEG:.2f} degree horizontal and {SIMULATED_VERTICAL_FOV_DEG:.2f} degree vertical FOV; lens distortion is assumed zero.",
+            f"ESTIMATED INTRINSICS, NOT FULLY CALIBRATED: {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} pixels, fx={SIMULATED_FX_PX:.1f} px, fy={SIMULATED_FY_PX:.1f} px, cx={SIMULATED_CX_PX:.1f} px, cy={SIMULATED_CY_PX:.1f} px; derived FOV {SIMULATED_HORIZONTAL_FOV_DEG:.2f} x {SIMULATED_VERTICAL_FOV_DEG:.2f} degrees; lens distortion is assumed zero.",
             f"FOV SPECIFICATION MISMATCH: reported diagonal is {REPORTED_DIAGONAL_FOV_DEG:.2f} degrees, but horizontal and vertical FOV imply {IMPLIED_DIAGONAL_FOV_DEG:.2f} degrees for a rectilinear camera.",
             ]
             if image_height > image_width:
@@ -1428,11 +1522,11 @@ class _HmiHandler(BaseHTTPRequestHandler):
             ]
           warnings = intrinsics_warnings + [
             f"REPORTED CAMERA POSITION: X 0.74 m aft, Y -0.85 m, Z 0.87 m in the supplied vehicle axes; camera height above ground is {SIMULATED_CAMERA_HEIGHT_M:.2f} m, giving ground Z=-0.28 m.",
-            f"STARTING POSE, NOT MEASURED: pitch {SIMULATED_CAMERA_PITCH_DEG:.0f} degrees (downward), roll {SIMULATED_CAMERA_ROLL_DEG:.0f} degrees; yaw assumes forward. Proposed search ranges are pitch {CAMERA_PITCH_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_PITCH_SEARCH_RANGE_DEG[1]:.0f} degrees and roll {CAMERA_ROLL_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_ROLL_SEARCH_RANGE_DEG[1]:.0f} degrees; no optimization has been performed.",
+            f"MODEL POSE, NOT PHYSICALLY CALIBRATED: effective pitch {SIMULATED_CAMERA_PITCH_DEG:.1f} degrees (downward) and roll {SIMULATED_CAMERA_ROLL_DEG:.1f} degrees fitted to seven videos of three people; pitch differs from the user-supplied -15 degrees. Yaw +{SIMULATED_CAMERA_YAW_DEG:.0f} degrees from vehicle-forward toward vehicle-left is unverified and cannot be fitted from height alone. Searched pitch {CAMERA_PITCH_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_PITCH_SEARCH_RANGE_DEG[1]:.0f} degrees and roll {CAMERA_ROLL_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_ROLL_SEARCH_RANGE_DEG[1]:.0f} degrees.",
             f"ILLUSTRATIVE ONLY: sensitivity to camera height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm. This is not a measured uncertainty interval and excludes camera orientation, FOV inconsistency, lens distortion, vehicle pitch, and pose error.",
-            "The displayed height is not a validated physical measurement. Measure camera orientation and calibrate lens distortion before relying on metric height.",
+            "The height estimate is not a validated physical measurement. Measure camera orientation and calibrate lens distortion before relying on metric height.",
             "Morphology centimeters are image-space proportions scaled by the simulated person-box height; they are not calibrated physical dimensions.",
-            "Seat offsets remain illustrative only; not comfort or safety recommendations.",
+            "The seat movement preview is illustrative, not a validated comfort or driving recommendation.",
           ]
         else:
           warnings = [
@@ -1440,7 +1534,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "Build class is a rough bounding-box-width proxy and needs validation.",
             "Reference and person must be upright, coplanar, and similarly distant from the camera.",
             "Torso and leg measurements are unavailable because this workflow uses one frontal image.",
-            "Seat offsets remain illustrative only.",
+            "The seat movement preview is illustrative, not a validated comfort or driving recommendation.",
           ]
         if frontal is None:
             warnings.append(
@@ -1478,6 +1572,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 else None
             ),
             "morphology_proportions": morphology_proportions,
+            "morphology_figure_keypoints": morphology_figure_keypoints,
             "morphology_reference_span_cm": (
               self._round_optional(morphology_reference_span_cm)
             ),

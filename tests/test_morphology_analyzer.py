@@ -20,6 +20,10 @@ def _result(
         4: (110.0, 22.0),
         5: (80.0, 60.0),
         6: (120.0, 60.0),
+        7: (70.0, 80.0),
+        8: (130.0, 80.0),
+        9: (75.0, 100.0),
+        10: (125.0, 100.0),
         11: (85.0, 110.0),
         12: (115.0, 110.0),
         13: (85.0, 170.0),
@@ -59,6 +63,8 @@ def test_frontal_profile_uses_normalized_image_measurements() -> None:
     assert result.face_to_ankle_span_px == pytest.approx(210.0, abs=1.0)
     assert result.shoulder_width_over_span == pytest.approx(40.0 / 210.0, abs=0.001)
     assert result.hip_width_over_span == pytest.approx(30.0 / 210.0, abs=0.001)
+    assert result.upper_arm_length_over_span == pytest.approx(22.36 / 210.0, abs=0.001)
+    assert result.lower_arm_length_over_span == pytest.approx(20.62 / 210.0, abs=0.001)
     assert result.upper_leg_length_over_span == pytest.approx(60.0 / 210.0, abs=0.001)
     assert result.keypoint_confidence == 0.9
 

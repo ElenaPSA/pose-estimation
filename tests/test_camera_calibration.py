@@ -64,38 +64,65 @@ def test_metric_height_requires_vehicle_mount_pose() -> None:
 
 
 def test_reported_mirror_camera_fov_builds_axis_specific_intrinsics() -> None:
-    calibration = CameraCalibration.simulated_for_image((2048, 1280))
+    calibration = CameraCalibration.simulated_for_image((1928, 1088))
     intrinsics = calibration.to_dict()["intrinsics"]
 
-    assert calibration.camera_matrix[0, 0] == pytest.approx(886.7038, abs=0.01)
-    assert calibration.camera_matrix[1, 1] == pytest.approx(1361.9197, abs=0.01)
-    assert intrinsics["image_size_px"] == [2048, 1280]
-    assert intrinsics["horizontal_fov_deg"] == 98.22
-    assert intrinsics["vertical_fov_deg"] == 50.34
+    assert calibration.camera_matrix[0, 0] == pytest.approx(830.0)
+    assert calibration.camera_matrix[1, 1] == pytest.approx(1078.0)
+    assert calibration.camera_matrix[0, 2] == pytest.approx(964.0)
+    assert calibration.camera_matrix[1, 2] == pytest.approx(544.0)
+    assert intrinsics["image_size_px"] == [1928, 1088]
+    assert intrinsics["horizontal_fov_deg"] == pytest.approx(98.5434, abs=0.001)
+    assert intrinsics["vertical_fov_deg"] == pytest.approx(53.5545, abs=0.001)
     assert intrinsics["reported_diagonal_fov_deg"] == 113.83
-    assert IMPLIED_DIAGONAL_FOV_DEG == pytest.approx(102.54, abs=0.01)
+    assert IMPLIED_DIAGONAL_FOV_DEG == pytest.approx(103.4053, abs=0.001)
 
 
-def test_anticlockwise_rotated_video_uses_resized_native_intrinsics() -> None:
+def test_1920_by_1080_stream_scales_native_intrinsics() -> None:
+    calibration = CameraCalibration.simulated_for_image((1920, 1080))
+
+    assert calibration.horizontal_fov_deg == pytest.approx(98.5434, abs=0.001)
+    assert calibration.vertical_fov_deg == pytest.approx(53.5545, abs=0.001)
+    assert calibration.reported_diagonal_fov_deg == 113.83
+    assert calibration.camera_matrix[0, 0] == pytest.approx(830.0 * 1920 / 1928)
+    assert calibration.camera_matrix[1, 1] == pytest.approx(1078.0 * 1080 / 1088)
+    assert calibration.camera_matrix[0, 2] == pytest.approx(
+        (964.0 + 0.5) * 1920 / 1928 - 0.5
+    )
+    assert calibration.camera_matrix[1, 2] == pytest.approx(
+        (544.0 + 0.5) * 1080 / 1088 - 0.5
+    )
+
+
+def test_anticlockwise_rotated_video_uses_native_intrinsics() -> None:
+    native = CameraCalibration.simulated_for_image((1928, 1088))
     calibration = CameraCalibration.simulated_for_image((1080, 1920))
 
-    assert calibration.horizontal_fov_deg == 98.22
-    assert calibration.vertical_fov_deg == 50.34
+    assert calibration.horizontal_fov_deg == pytest.approx(98.5434, abs=0.001)
+    assert calibration.vertical_fov_deg == pytest.approx(53.5545, abs=0.001)
     assert calibration.reported_diagonal_fov_deg == 113.83
-    assert calibration.camera_matrix[0, 0] == pytest.approx(1361.9197478 * 1080 / 1280)
-    assert calibration.camera_matrix[1, 1] == pytest.approx(886.7038469 * 1920 / 2048)
-    assert calibration.camera_matrix[0, 2] == pytest.approx(640.5 * 1080 / 1280 - 0.5)
-    assert calibration.camera_matrix[1, 2] == pytest.approx(1023.5 * 1920 / 2048 - 0.5)
+    assert calibration.camera_matrix[0, 0] == pytest.approx(
+        native.camera_matrix[1, 1] * 1080 / 1088
+    )
+    assert calibration.camera_matrix[1, 1] == pytest.approx(
+        native.camera_matrix[0, 0] * 1920 / 1928
+    )
+    assert calibration.camera_matrix[0, 2] == pytest.approx(
+        (544.0 + 0.5) * 1080 / 1088 - 0.5
+    )
+    assert calibration.camera_matrix[1, 2] == pytest.approx(
+        (1928 - 0.5 - 964.0) * 1920 / 1928 - 0.5
+    )
 
 
 def test_anticlockwise_rotation_preserves_native_pixel_rays() -> None:
-    native = CameraCalibration.simulated_for_image((2048, 1280))
+    native = CameraCalibration.simulated_for_image((1928, 1088))
     rotated = CameraCalibration.simulated_for_image((1080, 1920))
     native_ray = np.asarray([0.25, -0.10, 1.0])
     native_pixel = native.camera_matrix @ native_ray
     rotated_pixel = np.asarray([
-        (native_pixel[1] + 0.5) * 1080 / 1280 - 0.5,
-        (2048 - 1 - native_pixel[0] + 0.5) * 1920 / 2048 - 0.5,
+        (native_pixel[1] + 0.5) * 1080 / 1088 - 0.5,
+        (1928 - 1 - native_pixel[0] + 0.5) * 1920 / 1928 - 0.5,
         1.0,
     ])
 
@@ -107,11 +134,13 @@ def test_anticlockwise_rotation_preserves_native_pixel_rays() -> None:
 @pytest.mark.parametrize(("pitch_deg", "roll_deg"), [(-10, 0), (0, 0), (-15, 3), (-5, -3)])
 def test_rotated_intrinsics_recover_synthetic_height(pitch_deg, roll_deg) -> None:
     calibration = CameraCalibration.simulated_for_image(
-        (1080, 1920), pitch_deg=pitch_deg, roll_deg=roll_deg
+        (1080, 1920), pitch_deg=pitch_deg, roll_deg=roll_deg, yaw_deg=70
     )
     camera_position = np.asarray(calibration.camera_position_vehicle_m)
     rotation = calibration.camera_to_vehicle_rotation
-    foot_position = camera_position + np.asarray([0, 3, -1.15])
+    foot_position = camera_position + np.asarray(
+        [-3 * np.sin(np.radians(70)), 3 * np.cos(np.radians(70)), -1.15]
+    )
     head_position = foot_position + np.asarray([0, 0, 1.75])
 
     def project(position):
@@ -130,8 +159,44 @@ def test_starting_pitch_tilts_optical_axis_downward() -> None:
     calibration = CameraCalibration.simulated_for_image((1080, 1920))
     optical_axis = calibration.camera_to_vehicle_rotation @ np.asarray([0, 0, 1])
 
-    assert optical_axis == pytest.approx([0, np.cos(np.radians(10)), -np.sin(np.radians(10))])
+    assert optical_axis == pytest.approx([
+        -np.sin(np.radians(93)) * np.cos(np.radians(11.5)),
+        np.cos(np.radians(93)) * np.cos(np.radians(11.5)),
+        -np.sin(np.radians(11.5)),
+    ])
     assert np.linalg.det(calibration.camera_to_vehicle_rotation) == pytest.approx(1.0)
+
+
+def test_fitted_default_pose_estimates_reference_frame() -> None:
+    calibration = CameraCalibration.simulated_for_image((720, 1280))
+    estimate = calibration.estimate_height_cm(
+        (318.6667175, 236.8782959), (243.6583252, 1108.1826172), (720, 1280)
+    )
+
+    assert estimate.height_cm == pytest.approx(156.64, abs=0.02)
+
+
+def test_yaw_changes_ground_coordinates_but_not_height() -> None:
+    forward = CameraCalibration.simulated_for_image((1080, 1920), yaw_deg=0)
+    left = CameraCalibration.simulated_for_image((1080, 1920), yaw_deg=70)
+    head, foot = (500, 300), (500, 1500)
+
+    forward_estimate = forward.estimate_height_cm(head, foot, (1080, 1920))
+    left_estimate = left.estimate_height_cm(head, foot, (1080, 1920))
+
+    assert left_estimate.height_cm == pytest.approx(forward_estimate.height_cm)
+    assert left_estimate.vertical_alignment_residual_m == pytest.approx(
+        forward_estimate.vertical_alignment_residual_m
+    )
+    assert left_estimate.foot_position_vehicle_m != pytest.approx(
+        forward_estimate.foot_position_vehicle_m
+    )
+
+
+@pytest.mark.parametrize("yaw", [float("nan"), float("inf"), -181, 181])
+def test_invalid_simulated_yaw_is_rejected(yaw: float) -> None:
+    with pytest.raises(CameraCalibrationError, match="Invalid simulated"):
+        CameraCalibration.simulated_for_image((1080, 1920), yaw_deg=yaw)
 
 
 def test_incompatible_landscape_aspect_ratio_uses_generic_simulation() -> None:

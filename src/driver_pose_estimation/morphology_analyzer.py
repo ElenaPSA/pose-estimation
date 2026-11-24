@@ -11,6 +11,10 @@ ViewName = Literal["frontal", "lateral"]
 FACE_KEYPOINTS = (0, 1, 2, 3, 4)
 LEFT_SHOULDER = 5
 RIGHT_SHOULDER = 6
+LEFT_ELBOW = 7
+RIGHT_ELBOW = 8
+LEFT_WRIST = 9
+RIGHT_WRIST = 10
 LEFT_HIP = 11
 RIGHT_HIP = 12
 LEFT_KNEE = 13
@@ -26,6 +30,8 @@ class ViewMorphology:
     shoulder_width_over_span: float | None
     hip_width_over_span: float | None
     torso_length_over_span: float | None
+    upper_arm_length_over_span: float | None
+    lower_arm_length_over_span: float | None
     upper_leg_length_over_span: float | None
     lower_leg_length_over_span: float | None
     keypoint_confidence: float
@@ -153,6 +159,20 @@ class MorphologyAnalyzer:
                 (RIGHT_HIP, RIGHT_KNEE),
             ),
         )
+        upper_arm_lengths = self._segment_lengths(
+            points,
+            (
+                (LEFT_SHOULDER, LEFT_ELBOW),
+                (RIGHT_SHOULDER, RIGHT_ELBOW),
+            ),
+        )
+        lower_arm_lengths = self._segment_lengths(
+            points,
+            (
+                (LEFT_ELBOW, LEFT_WRIST),
+                (RIGHT_ELBOW, RIGHT_WRIST),
+            ),
+        )
         lower_leg_lengths = self._segment_lengths(
             points,
             (
@@ -166,6 +186,10 @@ class MorphologyAnalyzer:
             (
                 LEFT_SHOULDER,
                 RIGHT_SHOULDER,
+                LEFT_ELBOW,
+                RIGHT_ELBOW,
+                LEFT_WRIST,
+                RIGHT_WRIST,
                 LEFT_HIP,
                 RIGHT_HIP,
                 LEFT_KNEE,
@@ -197,6 +221,14 @@ class MorphologyAnalyzer:
                 self._distance(shoulder_center, hip_center)
                 if shoulder_center is not None and hip_center is not None
                 else None,
+                span,
+            ),
+            upper_arm_length_over_span=self._ratio(
+                self._mean(upper_arm_lengths),
+                span,
+            ),
+            lower_arm_length_over_span=self._ratio(
+                self._mean(lower_arm_lengths),
                 span,
             ),
             upper_leg_length_over_span=self._ratio(

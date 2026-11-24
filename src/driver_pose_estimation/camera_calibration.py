@@ -13,9 +13,17 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 
-CAMERA_IMAGE_SIZE_PX = (2048, 1280)
-SIMULATED_HORIZONTAL_FOV_DEG = 98.22
-SIMULATED_VERTICAL_FOV_DEG = 50.34
+CAMERA_IMAGE_SIZE_PX = (1928, 1088)
+SIMULATED_FX_PX = 830.0
+SIMULATED_FY_PX = 1078.0
+SIMULATED_CX_PX = 964.0
+SIMULATED_CY_PX = 544.0
+SIMULATED_HORIZONTAL_FOV_DEG = math.degrees(
+    2 * math.atan(CAMERA_IMAGE_SIZE_PX[0] / (2 * SIMULATED_FX_PX))
+)
+SIMULATED_VERTICAL_FOV_DEG = math.degrees(
+    2 * math.atan(CAMERA_IMAGE_SIZE_PX[1] / (2 * SIMULATED_FY_PX))
+)
 REPORTED_DIAGONAL_FOV_DEG = 113.83
 IMPLIED_DIAGONAL_FOV_DEG = math.degrees(
     2
@@ -29,8 +37,9 @@ IMPLIED_DIAGONAL_FOV_DEG = math.degrees(
 MIRROR_CAMERA_POSITION_VEHICLE_M = (-0.85, -0.74, 0.87)
 SIMULATED_CAMERA_HEIGHT_M = 1.15
 SIMULATED_CAMERA_HEIGHT_RANGE_M = (1.05, 1.25)
-SIMULATED_CAMERA_PITCH_DEG = -10.0
-SIMULATED_CAMERA_ROLL_DEG = 0.0
+SIMULATED_CAMERA_YAW_DEG = 93.0
+SIMULATED_CAMERA_PITCH_DEG = -11.5
+SIMULATED_CAMERA_ROLL_DEG = -0.1
 CAMERA_PITCH_SEARCH_RANGE_DEG = (-15.0, -5.0)
 CAMERA_ROLL_SEARCH_RANGE_DEG = (-3.0, 3.0)
 
@@ -167,8 +176,9 @@ class CameraCalibration:
         vertical_fov_deg: float = SIMULATED_VERTICAL_FOV_DEG,
         pitch_deg: float = SIMULATED_CAMERA_PITCH_DEG,
         roll_deg: float = SIMULATED_CAMERA_ROLL_DEG,
+        yaw_deg: float = SIMULATED_CAMERA_YAW_DEG,
     ) -> CameraCalibration:
-        """Build spec-based or generic intrinsics with assumed vehicle extrinsics."""
+        """Build estimated intrinsics; positive yaw turns forward toward vehicle-left."""
         width, height = image_size_px
         if width <= 0 or height <= 0:
             raise CameraCalibrationError("Image dimensions must be positive.")
@@ -178,14 +188,16 @@ class CameraCalibration:
             or not 1 < vertical_fov_deg < 179
             or not np.isfinite(pitch_deg)
             or not np.isfinite(roll_deg)
+            or not np.isfinite(yaw_deg)
             or not -90 < pitch_deg < 90
             or not -180 <= roll_deg <= 180
+            or not -180 <= yaw_deg <= 180
         ):
             raise CameraCalibrationError("Invalid simulated camera assumptions.")
         rotated_image = height > width
         matches_camera_aspect = abs(
             width / height - CAMERA_IMAGE_SIZE_PX[0] / CAMERA_IMAGE_SIZE_PX[1]
-        ) <= 1e-3
+        ) <= 1e-2
         if not rotated_image and not matches_camera_aspect:
             horizontal_fov_deg = 70.0
             vertical_fov_deg = math.degrees(
@@ -199,8 +211,24 @@ class CameraCalibration:
             scale_y = height / native_width
             focal_x = native_focal_y * scale_x
             focal_y = native_focal_x * scale_y
-            center_x = (native_height / 2 + 0.5) * scale_x - 0.5
-            center_y = (native_width / 2 - 0.5) * scale_y - 0.5
+            center_x = (SIMULATED_CY_PX + 0.5) * scale_x - 0.5
+            center_y = (native_width - 0.5 - SIMULATED_CX_PX) * scale_y - 0.5
+        elif matches_camera_aspect:
+            native_width, native_height = CAMERA_IMAGE_SIZE_PX
+            scale_x = width / native_width
+            scale_y = height / native_height
+            focal_x = (
+                native_width
+                / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
+                * scale_x
+            )
+            focal_y = (
+                native_height
+                / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
+                * scale_y
+            )
+            center_x = (SIMULATED_CX_PX + 0.5) * scale_x - 0.5
+            center_y = (SIMULATED_CY_PX + 0.5) * scale_y - 0.5
         else:
             focal_x = width / (2 * math.tan(math.radians(horizontal_fov_deg) / 2))
             focal_y = height / (2 * math.tan(math.radians(vertical_fov_deg) / 2))
@@ -208,6 +236,12 @@ class CameraCalibration:
             center_y = height / 2
         pitch = math.radians(pitch_deg)
         roll = math.radians(roll_deg)
+        yaw = math.radians(yaw_deg)
+        yaw_rotation = np.asarray([
+            [math.cos(yaw), -math.sin(yaw), 0.0],
+            [math.sin(yaw), math.cos(yaw), 0.0],
+            [0.0, 0.0, 1.0],
+        ])
         pitch_rotation = np.asarray([
             [1.0, 0.0, 0.0],
             [0.0, math.cos(pitch), -math.sin(pitch)],
@@ -241,7 +275,9 @@ class CameraCalibration:
                 MIRROR_CAMERA_POSITION_VEHICLE_M[1],
                 MIRROR_CAMERA_POSITION_VEHICLE_M[2],
             ),
-            camera_to_vehicle_rotation=pitch_rotation @ level_rotation @ roll_rotation,
+            camera_to_vehicle_rotation=(
+                yaw_rotation @ pitch_rotation @ level_rotation @ roll_rotation
+            ),
             horizontal_fov_deg=horizontal_fov_deg,
             vertical_fov_deg=vertical_fov_deg,
             reported_diagonal_fov_deg=(

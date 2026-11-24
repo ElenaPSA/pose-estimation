@@ -1,28 +1,50 @@
-/* One coordinate model drives the cards, reference drawing and animated seat. */
+/* One coordinate model drives the cards and animated seat. */
 const SeatStudio = (() => {
   const limits = Object.freeze({x: [0, 255], z: [0, 80], recline: [15, 55]});
   const reference = Object.freeze({x: 127.5, z: 40, recline: 25});
+  const fitAnchors = Object.freeze([
+    Object.freeze({height: 163, deltaX: 50, deltaZ: -10}),
+    Object.freeze({height: 185, deltaX: -50, deltaZ: 10})
+  ]);
+  const fittingRange = Object.freeze([fitAnchors[0].height, fitAnchors[1].height]);
   const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
   const signed = n => `${n > 0 ? "+" : ""}${Number(n.toFixed(1))}`;
-  let target = {...reference};
+  const nominalTorsoCm = 50;
+  let target = null;
   let frame = null;
   let generation = 0;
   const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  function compute(height) {
-    if (!Number.isFinite(height) || height < 120 || height > 230) {
-      throw new Error("Demo height must be between 120 and 230 cm.");
+  function compute(height, torsoCm = null) {
+    if (!Number.isFinite(height) || height < 80 || height > 260) {
+      throw new Error("Height must be between 80 and 260 cm.");
     }
-    const band = height < 166 ? 0 : height <= 185 ? 1 : 2;
-    const z = clamp(Math.round([0, 20, 38][band] + .6 * (height - [158, 178, 195][band])), 0, 80);
-    // Rebase the existing demo distance from the forward stop, not a new fit model.
-    return {x: 255 - [0, 15, 28][band], z, recline: [25, 25, 27][band]};
+    const [shorter, taller] = fitAnchors;
+    const fraction = (height - shorter.height) / (taller.height - shorter.height);
+    const deltaX = shorter.deltaX + fraction * (taller.deltaX - shorter.deltaX);
+    const deltaZ = shorter.deltaZ + fraction * (taller.deltaZ - shorter.deltaZ);
+    let recline = null;
+    if (Number.isFinite(torsoCm) && torsoCm / height >= .15 && torsoCm / height <= .5) {
+      const nominalProjection = nominalTorsoCm * Math.sin(reference.recline * Math.PI / 180);
+      const angle = Math.asin(clamp(nominalProjection / torsoCm, 0, 1)) * 180 / Math.PI;
+      recline = clamp(angle, reference.recline - 5, reference.recline + 5);
+    }
+    return {
+      x: clamp(reference.x + deltaX, limits.x[0], limits.x[1]),
+      z: clamp(reference.z + deltaZ, limits.z[0], limits.z[1]),
+      recline
+    };
+  }
+  function supports(height) {
+    return Number.isFinite(height) && height >= 80 && height <= 260;
   }
   function delta(value, from = reference) {
-    return {x: value.x - from.x, z: value.z - from.z, recline: value.recline - from.recline};
+    return {x: value.x - from.x, z: value.z - from.z,
+      recline: value.recline === null ? null : value.recline - from.recline};
   }
   function transform(value) {
-    return {x: 340 + value.x * .75, y: 400 - value.z * .75, angle: -value.recline};
+    return {x: 340 + value.x * .75, y: 400 - value.z * .75,
+      angle: -(value.recline === null ? reference.recline : value.recline)};
   }
   function definitions(prefix) {
     return `<defs>
@@ -34,6 +56,13 @@ const SeatStudio = (() => {
         <stop stop-color="#989ea6"/><stop offset=".45" stop-color="#555c64"/><stop offset="1" stop-color="#282d33"/>
       </linearGradient>
       <linearGradient id="${prefix}-metal"><stop stop-color="#172435"/><stop offset=".5" stop-color="#7c8b9e"/><stop offset="1" stop-color="#243346"/></linearGradient>
+      <linearGradient id="${prefix}-wheel-rim" x1="0" y1="0" x2="1" y2="1">
+        <stop stop-color="#b4c2d0"/><stop offset=".3" stop-color="#526174"/>
+        <stop offset=".65" stop-color="#263447"/><stop offset="1" stop-color="#8597ac"/>
+      </linearGradient>
+      <linearGradient id="${prefix}-wheel-hub" x1="0" y1="0" x2="1" y2=".7">
+        <stop stop-color="#667a91"/><stop offset=".5" stop-color="#24364c"/><stop offset="1" stop-color="#111d2c"/>
+      </linearGradient>
       <linearGradient id="${prefix}-orange-leather" x1="0" x2="1" y2=".6">
         <stop stop-color="#713310"/><stop offset=".38" stop-color="#ffb16d"/>
         <stop offset=".65" stop-color="#db762c"/><stop offset="1" stop-color="#71300f"/>
@@ -73,6 +102,24 @@ const SeatStudio = (() => {
       <circle cx="0" cy="-18" r="10" fill="#1b2b40" stroke="#596f89"/>
     </g>`;
   }
+  function steeringWheel(prefix) {
+    return `<g class="studio-steering-wheel" transform="translate(675 195)" role="img" aria-label="Illustrative steering wheel and column, fixed ahead of the seat">
+      <path d="M4 5L32 64" fill="none" stroke="#0a111c" stroke-width="18" stroke-linecap="round"/>
+      <path d="M4 5L32 64" fill="none" stroke="url(#${prefix}-metal)" stroke-width="12" stroke-linecap="round"/>
+      <path d="M9 11L34 63" fill="none" stroke="#8b9bb0" stroke-width="2" stroke-linecap="round" opacity=".6"/>
+      <g transform="rotate(18)">
+        <ellipse cx="4" cy="1" rx="22" ry="54" fill="none" stroke="#070e18" stroke-width="12"/>
+        <ellipse class="studio-wheel-rim" rx="22" ry="54" fill="none" stroke="url(#${prefix}-wheel-rim)" stroke-width="9"/>
+        <path d="M-17 -32Q-27 -6 -17 25M14 -41Q23 -18 21 8" fill="none" stroke="#c9d5e0" stroke-width="1.5" stroke-linecap="round" opacity=".55"/>
+        <path d="M-19 -13L-5 -3L5 -3L19 -13L17 -3L6 6L6 42L-6 42L-6 6L-17 -3Z"
+          fill="url(#${prefix}-metal)" stroke="#798ba1" stroke-width="1"/>
+        <path d="M-4 12V35M4 12V35" stroke="#b5c1ce" stroke-width="1" opacity=".55"/>
+        <ellipse class="studio-wheel-hub" rx="11" ry="15" fill="url(#${prefix}-wheel-hub)" stroke="#93a5b9" stroke-width="1"/>
+        <path d="M-6 -7Q0 -11 6 -7M-5 8H5" fill="none" stroke="#a7b8ca" stroke-width="1" opacity=".6"/>
+        <path d="M-19 -3L-13 1M13 1L19 -3" stroke="#d2dce6" stroke-width="2" stroke-linecap="round"/>
+      </g>
+    </g>`;
+  }
   function scene(prefix, value, ghostValue = reference) {
     return `${definitions(prefix)}
       <rect width="900" height="520" fill="#0b1523"/>
@@ -88,7 +135,7 @@ const SeatStudio = (() => {
         <text x="340" y="487" text-anchor="middle">0 / REAR STOP</text><text x="531.25" y="487" text-anchor="middle">255 mm / FRONT STOP</text>
         <text x="688" y="388">+X</text><text x="352" y="78">+Z</text>
       </g>
-      <g transform="translate(795 155)" stroke="#68819e" fill="none" opacity=".6"><ellipse rx="9" ry="42" stroke-width="5"/><path d="M0 0L30 62M-8 0H8"/></g>
+      ${steeringWheel(prefix)}
       ${seat(prefix, `${prefix}-ghost`, ghostValue, true)}
       ${seat(prefix, `${prefix}-seat`, value)}
       <circle cx="340" cy="400" r="4" fill="#6cc7c2"/>
@@ -115,7 +162,7 @@ const SeatStudio = (() => {
       <rect x="130" y="40" width="730" height="490" fill="url(#reference-grid)"/>
       <path d="M305 433H735M305 440H735" stroke="#41556e" stroke-width="3"/>
       <path d="M295 453H755" stroke="#8b9bb1" opacity=".4"/>
-      <g transform="translate(795 155)" stroke="#68819e" fill="none" opacity=".6"><ellipse rx="9" ry="42" stroke-width="5"/><path d="M0 0L30 62M-8 0H8"/></g>
+      ${steeringWheel("reference")}
       <path d="M${t.x} ${hingeY}V95 M${t.x} ${hingeY}L${upright.x} ${upright.y} M${t.x} ${hingeY}L${reclined.x} ${reclined.y}
         M${upright.x} ${upright.y}A230 230 0 0 0 ${reclined.x} ${reclined.y}" fill="none" stroke="#71859d" stroke-width="1.5"/>
       ${seat("reference", "reference-nominal", reference, true)}
@@ -150,51 +197,46 @@ const SeatStudio = (() => {
       </g>
     </svg>`;
   }
+
   function mount() {
     document.getElementById("seatStudio").innerHTML = `
       <div class="studio-heading"><div><div class="studio-eyebrow">CONFIGURATION VECTOR / KINEMATIC STUDIO</div>
       <h2>One seat. One reference.</h2><p>Every view faces the wheel on the right. Every number uses the same measured travel.</p></div>
       <span class="studio-badge">SIMULATION ONLY</span></div>
-      <div class="studio-reference-strip"><span><b>X</b> 0 rearward <i>&rarr;</i> 255 mm forward</span><span><b>Z</b> 0&ndash;80 mm upward</span><span><b>&theta;</b> 15&ndash;55&deg; from vertical</span></div>
-      <div class="studio-comfort-reference"><div class="studio-eyebrow">01 / NOMINAL COMFORT REFERENCE</div>
-        <h3>Every adjustment starts here.</h3>
-        <div class="studio-reference-schema">${referenceSchema()}</div>
-        <div class="studio-reference-strip"><span><b>X = ${reference.x} mm</b> from rear stop</span><span><b>Z = ${reference.z} mm</b> above lowest / ${70 + reference.z} mm from floor</span><span><b>&theta; = ${reference.recline}&deg;</b> from vertical</span></div>
-        <p>Agreed demonstration reference, not a universal or validated comfortable setting and not the measured current seat position.
-        Movements below = target &minus; this reference. The gray seat stays fixed; the orange seat shows the simulation.</p></div>
-      <div class="movement-figures">
+      <div id="seatFitModelStatus" class="studio-disclaimer" role="status"></div>
+      <div class="movement-figures" data-studio-view="adjustments">
         ${[["recline", "01", "Backrest Inclination", "backrest", "&#176;", "15&ndash;55&deg; from vertical"],
           ["z", "02", "Seat Height", "seatHeight", "mm", "0&ndash;80 mm above lowest"],
           ["x", "03", "Seat Depth", "seatDepth", "mm", "0&ndash;255 mm from rear stop"]].map(([key, n, name, id, unit, range]) => `
           <article class="movement-row"><div class="studio-card-heading"><span>${n} / ${key === "recline" ? "RECLINE" : key.toUpperCase()+" AXIS"}</span><span class="studio-direction">FRONT &rarr;</span></div>
           <svg id="studio-card-${key}" viewBox="130 40 730 470" role="img" aria-label="${name}: orange target overlaid on gray nominal comfort reference, whole seat facing right"></svg>
-          <div class="studio-card-copy"><span class="movement-label">${name}</span><output aria-label="${name} movement from nominal comfort reference"><b id="${id}"></b><small${key === "recline" ? ' style="position:relative;top:-.25em"' : ""}>${unit}</small></output>
+          <div class="studio-card-copy"><span class="movement-label">${name}</span><output aria-label="${name} movement from nominal comfort reference"><b id="${id}"></b><small${key === "recline" ? ' class="angle-unit"' : ""}>${unit}</small></output>
           <span id="studio-delta-${key}" class="studio-delta"></span><span id="studio-target-${key}" class="studio-range"></span>
-          <span class="studio-range">Physical range: ${range}</span>
+          <span class="studio-range">Vehicle travel limit: ${range}</span>
           <span class="studio-card-legend"><i></i> Gray: nominal comfort reference <i class="studio-target-key"></i> Orange: simulated seat</span></div></article>`).join("")}
       </div>
-      <div class="studio-hero">
-        <div class="studio-hero-top"><div><div class="studio-eyebrow">COMBINED MOTION</div><h3>Your configuration, in motion.</h3></div><button id="preview" type="button" class="studio-play">PLAY ADJUSTMENT <span>&rarr;</span></button></div>
+      <div class="studio-hero" data-studio-view="animation" hidden>
+        <div class="studio-hero-top"><div><div class="studio-eyebrow">COMBINED MOTION</div><h3>Prototype target, in motion.</h3></div><button id="preview" type="button" class="studio-play">PLAY ADJUSTMENT <span>&rarr;</span></button></div>
         <div class="studio-timeline" aria-label="Animation stages"><span data-stage="0">01 &nbsp; Fore / aft</span><span data-stage="1">02 &nbsp; Elevation</span><span data-stage="2">03 &nbsp; Recline</span><span data-stage="3">04 &nbsp; Final pose</span></div>
         <div class="studio-stage"><span class="studio-stage-label">REAR &nbsp; &larr;</span><span class="studio-stage-label studio-front">FRONT / WHEEL &nbsp; &rarr;</span>
-          <svg id="studioHero" viewBox="0 0 900 520" role="img" aria-label="Whole-seat animation, positive X right toward the wheel, positive Z up"></svg>
+          <svg id="studioHero" viewBox="130 40 730 470" role="img" aria-label="Whole-seat animation, positive X right toward the wheel, positive Z up"></svg>
           <div class="studio-live" aria-label="Animated movement from nominal comfort reference"><span>&Delta;X <b id="studioLiveX"></b> mm</span><span>&Delta;Z <b id="studioLiveZ"></b> mm</span><span>&Delta;&theta; <b id="studioLiveAngle"></b>&deg;</span></div>
         </div>
         <div class="studio-progress"><i id="studioProgress"></i></div>
         <div class="studio-legend"><span><i></i> Gray: nominal comfort reference</span><span><i></i> Orange: simulated seat</span><span>SCHEMATIC &middot; NOT TO SCALE</span></div>
         <div id="seatAnimationStatus" role="status" aria-live="polite"></div>
       </div>
-      <div class="studio-details"><div><div class="studio-eyebrow">REFERENCE / MEASURED LIMITS</div><h3>Coordinates without ambiguity.</h3>
+      <div class="studio-details" data-studio-view="reference" hidden><div class="studio-reference-schema">${referenceSchema()}</div>
+        <div><div class="studio-eyebrow">NOMINAL COMFORT REFERENCE / ASSUMED</div><h3>Coordinates without ambiguity.</h3>
+        <p>Nominal seat: <b>X ${reference.x} mm</b>, <b>Z ${reference.z} mm</b> (${70 + reference.z} mm above the floor), and <b>${reference.recline}&deg;</b> from vertical. This is an assumed demonstration position, not a measured or validated comfort setting.</p>
         <p>Fixed origin <b>O</b>: your marked cushion-bottom point at the <b>fully rearward, lowest</b> position.
         X increases toward the wheel on the right. Z increases upward. Y points vehicle-left; there is no lateral motion.</p>
         <p>Floor-to-marker height = <b>70 + Z mm</b> (70&ndash;150 mm). Recline is measured from vertical, increasing rearward.
         The marked point is not a measured automotive SRP. Rail, hinge and upholstery geometry are illustrative.</p></div>
         <div><div class="studio-eyebrow">TARGETS &ne; MOVEMENT COMMANDS</div><p id="seatTargetDescription"></p>
-        <p>Signed movements and live animation values use the nominal comfort reference above, not the rear/lowest coordinate origin.
+        <p>Signed movements and live animation values use the nominal comfort reference, not the rear/lowest coordinate origin.
         Each card shows only that axis changing; other axes stay at the reference. The hero combines all three, starting at zero movement.
-        The gray reference stays behind the orange simulated seat; they coincide when there is no change.</p>
-        <p class="studio-disclaimer">Automatic height-band demo rules are not a validated fitting model. Physical bounds do not establish comfort, safe reach or joint reachability.
-        Stationary evaluation only; no vehicle commands. Body-build selection does not change these demo targets.</p></div></div>`;
+        The gray reference stays behind the orange simulated seat; they coincide when there is no change.</p></div></div>`;
     document.getElementById("preview").addEventListener("click", play);
   }
   function position(prefix, value) {
@@ -206,7 +248,8 @@ const SeatStudio = (() => {
     const change = delta(value);
     document.getElementById("studioLiveX").textContent = signed(change.x);
     document.getElementById("studioLiveZ").textContent = signed(change.z);
-    document.getElementById("studioLiveAngle").textContent = signed(change.recline);
+    document.getElementById("studioLiveAngle").textContent =
+      target.recline === null ? "—" : signed(change.recline);
   }
   function stop() {
     generation++;
@@ -220,34 +263,59 @@ const SeatStudio = (() => {
       el.classList.toggle("complete", i < stage);
     });
   }
-  function update(height) {
-    target = compute(height);
+  function update(height, torsoCm = null) {
+    target = compute(height, torsoCm);
     stop();
+    const available = target !== null;
+    document.getElementById("preview").disabled = !available;
+    if (!available) {
+      document.getElementById("seatAnimationStatus").textContent =
+        "No seat movement estimate: height is outside the supported input range.";
+      return;
+    }
+    const withinFitData = height >= fittingRange[0] && height <= fittingRange[1];
+    const fitStatus = document.getElementById("seatFitModelStatus");
+    fitStatus.hidden = withinFitData;
+    fitStatus.textContent = withinFitData ? "" :
+      `Seat X/Z extrapolated beyond the two reported seat trials (${fittingRange[0]} and ${fittingRange[1]} cm), clipped to travel limits; unvalidated.`;
     const change = delta(target);
     for (const [axis, id] of [["x","seatDepth"],["z","seatHeight"],["recline","backrest"]]) {
-      document.getElementById(id).textContent = signed(change[axis]);
-      document.getElementById(`studio-card-${axis}`).innerHTML = scene(`card-${axis}`, {...reference, [axis]:target[axis]}, reference);
+      const unavailable = change[axis] === null;
+      document.getElementById(id).textContent = unavailable ? "—" : signed(change[axis]);
+      document.getElementById(`studio-card-${axis}`).innerHTML = scene(`card-${axis}`,
+        {...reference, [axis]: unavailable ? reference[axis] : target[axis]}, reference);
       const direction = axis === "x" ? (change.x < 0 ? "rearward" : "forward") :
         axis === "z" ? (change.z < 0 ? "downward" : "upward") :
         (change.recline < 0 ? "more upright" : "more reclined");
-      document.getElementById(`studio-delta-${axis}`).textContent = change[axis] === 0 ?
-        "No movement from nominal comfort reference" : `${direction} from nominal comfort reference`;
+      const description = change[axis] === 0
+        ? "No movement from nominal comfort reference" : `${direction} from nominal comfort reference`;
+      document.getElementById(`studio-delta-${axis}`).textContent = unavailable
+        ? "Unavailable: a usable detected torso estimate is required"
+        : axis === "recline" ? `${description} (illustrative, not fitted)` : description;
       const unit = axis === "recline" ? "\u00b0" : " mm";
-      document.getElementById(`studio-target-${axis}`).textContent =
-        `Reference ${reference[axis]}${unit} \u2192 target ${target[axis]}${unit} (absolute)`;
+      document.getElementById(`studio-target-${axis}`).textContent = unavailable
+        ? "Backrest shown at reference for illustration only; no estimate."
+        :
+        `Reference ${reference[axis]}${unit} \u2192 target ${Number(target[axis].toFixed(1))}${unit} (absolute)`;
     }
     document.getElementById("studioHero").innerHTML = scene("hero", target);
     document.getElementById("seatTargetDescription").textContent =
-      `Absolute demo target: X ${target.x} mm from rear stop; Z ${target.z} mm above lowest (${70 + target.z} mm from floor); recline ${target.recline}\u00b0 from vertical.`;
-    document.getElementById("seatAnimationStatus").textContent = "Target preview ready. Play from the gray nominal comfort reference; orange shows the simulated seat.";
+      `Prototype target: X ${Number(target.x.toFixed(1))} mm, Z ${Number(target.z.toFixed(1))} mm; ${
+        target.recline === null ? "backrest estimate unavailable" :
+          `illustrative backrest ${Number(target.recline.toFixed(1))}\u00b0 from vertical`}.`;
+    document.getElementById("seatAnimationStatus").textContent = withinFitData
+      ? "Interpolated target ready within reported height anchors. Starting seat position is assumed."
+      : "Extrapolated target clipped to travel limits; estimate is unvalidated beyond reported heights.";
     document.getElementById("studioProgress").style.width = "0%";
     stages(-1);
     live(target);
   }
   function play() {
+    if (!target) return;
     stop();
     const run = generation;
-    const end = {...target}, change = delta(end);
+    const end = {...target, recline: target.recline === null ? reference.recline : target.recline};
+    const change = delta(end);
     const finish = () => {
       if (run !== generation) return;
       frame = null;
@@ -257,7 +325,9 @@ const SeatStudio = (() => {
       document.getElementById("studioProgress").style.width = "100%";
       document.getElementById("preview").textContent = "REPLAY ADJUSTMENT \u21bb";
       document.getElementById("seatAnimationStatus").textContent =
-        `Demo complete. Movements from nominal comfort reference: X ${signed(change.x)} mm, Z ${signed(change.z)} mm, recline ${signed(change.recline)}\u00b0. Absolute target: X ${end.x} mm, Z ${end.z} mm (${70 + end.z} mm above floor), recline ${end.recline}\u00b0. No real seat movement.`;
+        `Prototype model complete. Movements from assumed reference: X ${signed(change.x)} mm, Z ${signed(change.z)} mm. ${
+          target.recline === null ? "Backrest estimate unavailable; displayed at reference." :
+            `Illustrative backrest movement ${signed(change.recline)}°.`} No real seat movement.`;
     };
     if (reducedMotion()) { finish(); return; }
     const duration = 4200;
@@ -289,5 +359,5 @@ const SeatStudio = (() => {
     };
     frame = requestAnimationFrame(tick);
   }
-  return {mount, update, compute, delta, transform, limits, reference};
+  return {mount, update, compute, delta, transform, limits, reference, fitAnchors, fittingRange, supports};
 })();
