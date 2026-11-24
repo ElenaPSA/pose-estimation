@@ -648,6 +648,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     figure.hidden = false;
     return [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].some(point);
   }
+  async function freezeFrame(dataUrl, timestamp, signal) {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    signal.throwIfAborted();
+    imageView.image = image;
+    imageView.dataUrl = dataUrl;
+    stopPlaybackMirror();
+    detectionVideoFrame.hidden = true;
+    detectionImage.src = dataUrl;
+    detectionImage.hidden = false;
+    detectionViewport.hidden = false;
+    detectionViewport.classList.add("scanning");
+    detectionStatus.textContent = `Person detected at ${timestamp.toFixed(2)} s. Frozen frame; collecting height measurements…`;
+  }
   VideoCapture.mount({
     playback(video) {
       startPlaybackMirror(video);
@@ -665,21 +680,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       stopPlaybackMirror();
       detectionViewport.classList.remove("scanning");
     },
-    async captured(dataUrl, timestamp, signal, sampledPreview = false) {
-    const image = new Image();
-    image.src = dataUrl;
-    await image.decode();
-    signal.throwIfAborted();
-    imageView.image = image;
-    imageView.dataUrl = dataUrl;
-    stopPlaybackMirror();
-    detectionVideoFrame.hidden = true;
-    detectionImage.src = dataUrl;
-    detectionImage.hidden = false;
-    detectionViewport.hidden = false;
-    detectionViewport.classList.add("scanning");
+    frozen: freezeFrame,
+    async captured(dataUrl, timestamp, signal, sampledPreview = false, heightSamples = []) {
+    if (detectionImage.hidden || imageView.dataUrl !== dataUrl) await freezeFrame(dataUrl, timestamp, signal);
     status.textContent = `Analyzing the complete frame detected at ${timestamp.toFixed(2)} s…`;
-    detectionStatus.textContent = `Person detected at ${timestamp.toFixed(2)} s. Frozen frame; estimating morphology segments…`;
     try {
       const response = await fetch("/analyze", {
         method: "POST",
@@ -687,7 +691,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           mode: "video_demo",
-          frontal: {image: imageView.dataUrl}
+          frontal: {image: imageView.dataUrl},
+          height_samples_cm: heightSamples
         })
       });
       const result = await response.json();
@@ -704,11 +709,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       updateSeat(result.height_cm, morphology?.torso_length);
       const hasLandmarks = renderMorphologyFigure(dataUrl, result.morphology_figure_keypoints, morphology);
       detectionStatus.textContent = `${hasLandmarks ? "2D landmarks shown" : "No reliable pose landmarks available"}. Frozen at detected frame ${timestamp.toFixed(2)} s. ${
-        sampledPreview ? "Sampled preview only." : "Video keeps playing."}`;
+        sampledPreview ? "Sampled preview only." : document.getElementById("sourceVideo").ended ? "Video playback ended." : "Video keeps playing."}`;
       status.textContent = calibrated
         ? `Calibrated camera height estimate complete at ${timestamp.toFixed(2)} s. Review the calibration and geometry residual before use.`
         : simulated
-          ? `Simulated camera estimate complete at ${timestamp.toFixed(2)} s. This is not calibrated.`
+          ? `Simulated camera estimate from ${result.height_sample_count} frame(s)${result.height_sample_count > 1 ? " (median)" : " (single-frame fallback)"}; frozen at ${timestamp.toFixed(2)} s. This is not calibrated.`
           : `Reference-marker analysis complete at ${timestamp.toFixed(2)} s.`;
     } catch (error) {
       stopPlaybackMirror();
@@ -1028,6 +1033,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 recent_observations = []
                 best_observation = None
                 best_quality = -1.0
+                frozen_observation = None
+                height_samples: list[float] = []
                 for index in range(samples):
                     frame_number = min(int(count) - 1, int((index + .5) * count / samples))
                     capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
@@ -1057,6 +1064,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
                       if tracked_box is not None
                       else valid_candidate
                     )
+                    if frozen_observation is not None and valid_candidate and not same_track:
+                        break
                     if same_track:
                         tracked_box = current_box
                     eligible = valid_candidate and same_track
@@ -1079,11 +1088,14 @@ class _HmiHandler(BaseHTTPRequestHandler):
                         if len(recent_observations) > 3:
                           recent_observations.pop(0)
                         confirmations = len(recent_observations)
-                        if confirmations >= 2 and observation["near_camera"]:
-                          return max(
-                            recent_observations,
-                            key=lambda candidate: candidate["quality_score"],
-                          )
+                        if confirmations >= 2 and observation["near_camera"] and result.get("height_cm") is not None:
+                          if frozen_observation is None:
+                            frozen_observation = observation
+                            if preview is not None:
+                              preview({"type": "frozen", **observation})
+                          height_samples.append(result["height_cm"])
+                          if len(height_samples) >= 5:
+                            break
                         if confirmations >= 3:
                           for candidate in recent_observations:
                             if candidate["quality_score"] > best_quality:
@@ -1100,6 +1112,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
                             if same_track
                             else "The detected person changed."
                         )
+                if frozen_observation is not None:
+                  return {**frozen_observation, "height_samples_cm": height_samples}
                 if best_observation is None:
                   raise ValueError(
                     f"No high-confidence complete-body frame in {samples} samples. "
@@ -1175,6 +1189,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
         quality_score = 0.0
         relative_height = 0.0
         near_camera = False
+        height_cm = None
         if reason is None and pose is not None:
             keypoints = {point.index: point for point in pose.keypoints}
             keypoint_confidence = float(
@@ -1207,7 +1222,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
               simulated_camera = CameraCalibration.simulated_for_image(
                 (frame_width, frame_height)
               )
-              self._estimate_calibrated_height(simulated_camera, pose, image)
+              estimate = self._estimate_calibrated_height(simulated_camera, pose, image)
+              if not 80 <= estimate.height_cm <= 260:
+                  raise CameraCalibrationError("Camera-geometry height is outside the supported 80-260 cm range.")
+              height_cm = estimate.height_cm
             except CameraCalibrationError as error:
               reason = str(error)
         return {
@@ -1221,6 +1239,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "quality_score": quality_score,
             "relative_height": relative_height,
             "near_camera": near_camera,
+            "height_cm": height_cm,
             "track_box": track_box,
         }
 
@@ -1261,6 +1280,15 @@ class _HmiHandler(BaseHTTPRequestHandler):
         calibrated_demo = demo and calibration_data is not None
         simulated_demo = demo and calibration_data is None
         camera_geometry_demo = demo
+        height_samples = payload.get("height_samples_cm", [])
+        if not isinstance(height_samples, list) or len(height_samples) > 5 or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not np.isfinite(value) or not 80 <= value <= 260
+            for value in height_samples
+        ):
+            raise ValueError("Height samples must contain at most five finite values between 80 and 260 cm.")
+        if height_samples and not simulated_demo:
+            raise ValueError("Height samples require the simulated video camera.")
         reference_cm = 20.0 if demo else payload.get("reference_length_cm")
         if not isinstance(reference_cm, (int, float)) or not 10 <= reference_cm <= 250:
             raise ValueError("Reference length must be between 10 and 250 cm.")
@@ -1319,7 +1347,10 @@ class _HmiHandler(BaseHTTPRequestHandler):
             hip_width = None
             face_height_cm = None
             box_height_cm = camera_height_estimate.height_cm
-            height_cm = camera_height_estimate.height_cm
+            height_cm = (
+                float(np.median(height_samples))
+                if height_samples else camera_height_estimate.height_cm
+            )
         else:
             frontal_span_cm = (
                 frontal.face_to_ankle_span_px * reference_cm / marker_pixels
@@ -1474,7 +1505,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "Height uses chessboard-calibrated intrinsics and the supplied camera-to-vehicle pose.",
             f"Assumes a level ground plane at vehicle z={calibration.ground_plane_z_m:.2f} m and an upright vertical body.",
             "Head and ground-contact use the person-box top/bottom with ankle-centered ground position; box localization and mount-pose uncertainty are not included.",
-            f"Vertical-line consistency residual: {camera_height_estimate.vertical_alignment_residual_m:.3f} m.",
+            f"Frozen-frame vertical-line consistency residual: {camera_height_estimate.vertical_alignment_residual_m:.3f} m.",
             f"Chessboard RMS reprojection error: {reprojection_error}; this does not validate camera mount measurements.",
                 "Morphology centimeters are image-space proportions scaled by the estimated person-box height; they are not independent 3D segment measurements.",
             "Build class is a rough bounding-box-width proxy and needs validation.",
@@ -1535,6 +1566,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
                 else None
             ),
             "height_cm": round(height_cm, 1),
+            "height_sample_count": len(height_samples) if height_samples else 1,
             "height_sensitivity_range_cm": (
                 list(height_sensitivity_range_cm)
                 if height_sensitivity_range_cm is not None

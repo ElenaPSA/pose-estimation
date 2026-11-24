@@ -85,7 +85,7 @@ def test_hmi_contains_driver_profiles_and_seat_studio_without_height() -> None:
     assert "100% { top: 100%; opacity: .75; }" in HTML
     assert "await scanAnimation;" not in HTML
     assert "Video keeps playing" in HTML
-    assert "Frozen frame; estimating morphology segments" in HTML
+    assert "Frozen frame; collecting height measurements" in HTML
     assert HTML.count('<line id="cameraTo') == 0
     assert 'id="detectedPersonBox"' not in HTML
     assert "<polygon" not in HTML
@@ -201,7 +201,7 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert "await video.play();" in video_source
         assert "video.currentTime = selectedObservation.timestamp" not in video_source
         assert "video.currentTime = bestObservation.timestamp" not in video_source
-        assert "confirmations >= 2 && observation.nearCamera" in video_source
+        assert "(nearby || confirmations >= 2) && observation.nearCamera" in video_source
         assert "confirmations >= 3" in video_source
         assert "for (const time of times)" in video_source
         assert "await probe(video, time)" in video_source
@@ -552,6 +552,26 @@ def test_video_analysis_uses_reported_camera_height(
     assert any("90 degree anticlockwise" in warning for warning in result["warnings"])
     assert any("FOV SPECIFICATION MISMATCH" in warning for warning in result["warnings"])
 
+    median_result = handler._analyze_payload({
+        "mode": "video_demo",
+        "frontal": {"image": "data:image/png;base64," + base64.b64encode(encoded).decode()},
+        "height_samples_cm": [150, 170, 250],
+    })
+    assert median_result["height_cm"] == 170
+    assert median_result["height_sample_count"] == 3
+    assert median_result["size_class"] == "medium"
+    assert median_result["morphology_reference_span_cm"] == pytest.approx(
+        result["morphology_reference_span_cm"] * 170 / expected_height, abs=.2
+    )
+    assert median_result["height_sensitivity_range_cm"][1] == pytest.approx(170 * 1.25 / 1.15, abs=.1)
+
+
+@pytest.mark.parametrize("samples", [[True], [float("nan")], [79], [261], [150] * 6, "170"])
+def test_invalid_video_height_samples_rejected(samples) -> None:
+    handler = object.__new__(_HmiHandler)
+    with pytest.raises(ValueError, match="Height samples"):
+        handler._analyze_payload({"mode": "video_demo", "height_samples_cm": samples})
+
 
 def test_video_accepts_complete_body_pose() -> None:
     assert _HmiHandler._full_body_reason(
@@ -629,6 +649,7 @@ def test_video_tracker_ignores_initial_ineligible_detection(tmp_path) -> None:
             "quality_score": 0.7 + sample * 0.01,
             "relative_height": 0.6,
             "near_camera": True,
+            "height_cm": 150 + sample,
             "track_box": valid_track,
             "reason": None,
         }
@@ -636,8 +657,43 @@ def test_video_tracker_ignores_initial_ineligible_detection(tmp_path) -> None:
     handler._probe_image = probe
     captured = handler._capture_video(len(video_bytes))
 
-    assert probes == 3
+    assert probes == 7
     assert captured["timestamp"] == 0.6
+    assert captured["height_samples_cm"] == [152, 153, 154, 155, 156]
+
+
+def test_video_height_samples_stop_when_person_changes(tmp_path) -> None:
+    video_path = tmp_path / "changing-person.avi"
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (200, 250))
+    assert writer.isOpened()
+    try:
+        for _ in range(30):
+            writer.write(np.zeros((250, 200, 3), dtype=np.uint8))
+    finally:
+        writer.release()
+
+    handler = object.__new__(_HmiHandler)
+    video_bytes = video_path.read_bytes()
+    handler.rfile = BytesIO(video_bytes)
+    probes = 0
+
+    def probe(_image):
+        nonlocal probes
+        probes += 1
+        return {
+            "eligible": True, "confident": True, "confidence_score": .9,
+            "quality_score": .8, "relative_height": .8, "near_camera": True,
+            "track_box": (
+                {"x1": .1, "y1": .1, "x2": .3, "y2": .9}
+                if probes <= 3 else {"x1": .7, "y1": .1, "x2": .9, "y2": .9}
+            ),
+            "height_cm": 170 if probes <= 3 else 210, "reason": None,
+        }
+
+    handler._probe_image = probe
+    result = handler._capture_video(len(video_bytes))
+    assert probes == 4
+    assert result["height_samples_cm"] == [170, 170]
 
 
 def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
@@ -814,9 +870,11 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert response.status == 200
         assert response.getheader("Content-Type") == "application/x-ndjson"
         events = [json.loads(line) for line in response.read().splitlines()]
-        assert [event["type"] for event in events] == ["frame"] * 15 + ["captured"]
-        assert events[-1]["image"] == events[-2]["image"]
-        assert events[-1]["timestamp"] == events[-2]["timestamp"]
+        frozen = next(event for event in events if event["type"] == "frozen")
+        assert events[-1]["type"] == "captured"
+        assert events[-1]["image"] == frozen["image"]
+        assert events[-1]["timestamp"] == frozen["timestamp"]
+        assert len(events[-1]["height_samples_cm"]) == 2
         assert events[0]["timestamp"] < events[1]["timestamp"]
         connection.request("POST", "/capture-video", b"invalid video", {"Content-Type": "application/octet-stream"})
         response = connection.getresponse()

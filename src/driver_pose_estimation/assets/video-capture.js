@@ -43,7 +43,7 @@ const VideoCapture = (() => {
     const distance = Math.hypot(previousX - currentX, previousY - currentY);
     return overlap >= .05 || distance <= .08 * Math.SQRT2;
   }
-  function mount({captured, reset, progress, playback, failed}) {
+  function mount({captured, frozen, reset, progress, playback, failed}) {
     const input = document.getElementById("videoFile");
     const fileStatus = document.getElementById("videoFileStatus");
     const video = document.getElementById("sourceVideo");
@@ -120,6 +120,7 @@ const VideoCapture = (() => {
             const reader = streamResponse.body.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
+            let frozenPreview = false;
             const consume = async line => {
               if (!line.trim()) return false;
               const event = JSON.parse(line);
@@ -127,13 +128,15 @@ const VideoCapture = (() => {
               if (event.error) throw new Error(event.error);
               if (event.type === "frame") {
                 preview.src = event.image;
-                progress(event.image, event.timestamp);
+                if (!frozenPreview) progress(event.image, event.timestamp);
                 status.textContent = `Local decoded preview (sampled frames): ${event.timestamp.toFixed(2)} s. Checking full-body visibility…`;
                 signal.throwIfAborted();
+              } else if (event.type === "frozen") {
+                frozenPreview = true;
+                await frozen(event.image, event.timestamp, signal);
               } else if (event.type === "captured") {
                 preview.src = event.image;
-                progress(event.image, event.timestamp);
-                await captured(event.image, event.timestamp, signal, true);
+                await captured(event.image, event.timestamp, signal, true, event.height_samples_cm || []);
                 return true;
               }
               return false;
@@ -178,7 +181,9 @@ const VideoCapture = (() => {
         let bestObservation = null;
         let bestQuality = -1;
         let reason = "No suitable person detected.";
-        const probe = async (source, time) => {
+        let frozenObservation = null;
+        const heightSamples = [];
+        const probe = async (source, time, nearby = false) => {
           context.drawImage(source, 0, 0, canvas.width, canvas.height);
           const image = canvas.toDataURL("image/jpeg", .9);
           const response = await fetch("/probe-frame", {
@@ -193,9 +198,11 @@ const VideoCapture = (() => {
           examined++;
           const currentBox = result.track_box;
           const validCandidate = result.eligible && result.confident && currentBox;
-          const sameTrack = trackedBox
-            ? samePerson(trackedBox, currentBox)
+          const referenceBox = nearby ? frozenObservation.trackBox : trackedBox;
+          const sameTrack = referenceBox
+            ? samePerson(referenceBox, currentBox)
             : Boolean(validCandidate);
+          if (nearby && !sameTrack) return false;
           if (sameTrack) trackedBox = currentBox;
           if (validCandidate && sameTrack) {
             const observation = {
@@ -203,13 +210,23 @@ const VideoCapture = (() => {
               timestamp: time,
               quality: Number(result.quality_score) || 0,
               relativeHeight: Number(result.relative_height) || 0,
-              nearCamera: Boolean(result.near_camera)
+              nearCamera: Boolean(result.near_camera),
+              height: result.height_cm,
+              trackBox: currentBox
             };
             recentObservations.push(observation);
             if (recentObservations.length > 3) recentObservations.shift();
             confirmations = recentObservations.length;
-            // Freeze on the frame that completed the confirmation so the still matches the playing video.
-            if (confirmations >= 2 && observation.nearCamera) return observation;
+            if ((nearby || confirmations >= 2) && observation.nearCamera &&
+                Number.isFinite(observation.height)) {
+              if (!frozenObservation) {
+                frozenObservation = observation;
+                await frozen(observation.image, observation.timestamp, signal);
+              }
+              heightSamples.push(observation.height);
+              reason = `Collecting close-up height measurements: ${heightSamples.length}/5.`;
+              if (!nearby || heightSamples.length >= 5) return true;
+            }
             if (confirmations >= 3) {
               for (const candidate of recentObservations) {
                 if (candidate.quality > bestQuality) {
@@ -218,9 +235,11 @@ const VideoCapture = (() => {
                 }
               }
             }
-            reason = observation.nearCamera
-              ? `Near-camera frame confirmed ${confirmations}/3 times.`
-              : `Tracking the same complete body: ${confirmations}/3 consecutive frames.`;
+            if (!frozenObservation) {
+              reason = observation.nearCamera
+                ? `Near-camera frame confirmed ${confirmations}/3 times.`
+                : `Tracking the same complete body: ${confirmations}/3 consecutive frames.`;
+            }
           } else {
             recentObservations = [];
             confirmations = 0;
@@ -229,11 +248,20 @@ const VideoCapture = (() => {
               : result.reason || "The detected person changed or was not confirmed.";
           }
           status.textContent = `Scanning video at ${time.toFixed(2)} s of ${video.duration.toFixed(2)} s. ${reason}`;
-          return null;
+          return false;
         };
-        const freezeOn = async observation => {
-          status.textContent = `Complete near-camera frame found at ${observation.timestamp.toFixed(2)} s. Analyzing…`;
-          await captured(observation.image, observation.timestamp, signal);
+        const finish = async observation => {
+          if (heightSamples.length) {
+            for (const offset of [-.2, .2, -.4, .4, -.6, .6, -.8, .8]) {
+              const time = observation.timestamp + offset;
+              if (time <= 0 || time >= video.duration) continue;
+              signal.throwIfAborted();
+              await waitFor(scanVideo, "seeked", () => { scanVideo.currentTime = time; }, signal);
+              if (await probe(scanVideo, time, true)) break;
+            }
+          }
+          status.textContent = `Analyzing the frozen frame and ${heightSamples.length} close-up height measurements…`;
+          await captured(observation.image, observation.timestamp, signal, false, heightSamples);
         };
         // Probe the frames being played so detection stays in step with both figures.
         let lastProbeTime = -1;
@@ -245,11 +273,15 @@ const VideoCapture = (() => {
             continue;
           }
           lastProbeTime = time;
-          const observation = await probe(video, time);
-          if (observation) {
-            await freezeOn(observation);
+          const complete = await probe(video, time);
+          if (complete) {
+            await finish(frozenObservation);
             return;
           }
+        }
+        if (frozenObservation) {
+          await finish(frozenObservation);
+          return;
         }
         if (!bestObservation) {
           recentObservations = [];
@@ -258,12 +290,16 @@ const VideoCapture = (() => {
           for (const time of times) {
             signal.throwIfAborted();
             await waitFor(scanVideo, "seeked", () => { scanVideo.currentTime = time; }, signal);
-            const observation = await probe(scanVideo, time);
-            if (observation) {
-              await freezeOn(observation);
+            const complete = await probe(scanVideo, time);
+            if (complete) {
+              await finish(frozenObservation);
               return;
             }
           }
+        }
+        if (frozenObservation) {
+          await finish(frozenObservation);
+          return;
         }
         if (!bestObservation) {
           throw new Error(`No high-confidence complete-body frame in ${examined} checks. ${reason} Move closer while keeping the head and both feet inside the frame.`);
