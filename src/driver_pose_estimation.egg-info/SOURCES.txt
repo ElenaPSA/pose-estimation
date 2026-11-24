@@ -26,7 +26,6 @@ src/driver_pose_estimation.egg-info/dependency_links.txt
 src/driver_pose_estimation.egg-info/entry_points.txt
 src/driver_pose_estimation.egg-info/requires.txt
 src/driver_pose_estimation.egg-info/top_level.txt
-src/driver_pose_estimation/assets/driver-seat-profile.png
 tests/test_models.py
 tests/test_morphology_analyzer.py
 tests/test_morphology_visualizer.py

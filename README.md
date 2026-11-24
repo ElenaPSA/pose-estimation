@@ -199,10 +199,10 @@ This separate webcam workflow asks for an upright frontal view (`F`) and then a 
 
 ### `person_height_video`: annotated video height experiment
 
-This module accepts a webcam index by default or a video file with `--source`:
+This module accepts a webcam index by default or a video file with `--source`. Supply your own video file; videos are not included in the repository:
 
 ```powershell
-python -m driver_pose_estimation.person_height_video --source .\rotated_2.mp4 --output .\outputs\person_height_output.mp4 --capture-output .\outputs\person_height_capture.jpg
+python -m driver_pose_estimation.person_height_video --source .\your-video.mp4 --output .\outputs\person_height_output.mp4 --capture-output .\outputs\person_height_capture.jpg
 ```
 
 Useful arguments:

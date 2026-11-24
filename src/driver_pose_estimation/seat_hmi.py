@@ -747,41 +747,11 @@ class _HmiHandler(BaseHTTPRequestHandler):
     face_detector: ClassVar[FaceHeightDetector | None] = None
 
     def do_GET(self) -> None:
-        image_assets = {
-            "/assets/video-capture.js": "video-capture.js",
-            "/assets/seat-studio.js": "seat-studio.js",
-            "/assets/seat-reference-side.png": "seat-reference-side.png",
-            "/assets/seat-reference-definition.png": "seat-reference-definition.png",
-            "/assets/seat-reference-ranges.png": "seat-reference-ranges.png",
-            "/assets/seat-side-motion.svg": "seat-side-motion.svg",
-            "/assets/driver-seat-profile.png": "driver-seat-profile.png",
-            "/assets/automotive-seat-adjustment-scheme.png": (
-                "automotive-seat-adjustment-scheme.png"
-            ),
-            "/assets/automotive-seat-proposed-overlay.png": (
-                "automotive-seat-proposed-overlay.png"
-            ),
-        }
-        if self.path in image_assets:
-            asset_path = Path(__file__).parent / "assets" / image_assets[self.path]
-            try:
-                body = self.script_assets.get(asset_path.name)
-                if body is None:
-                    body = asset_path.read_bytes()
-            except OSError:
-                logger.exception(
-                    "Could not read HMI illustration asset: %s", asset_path
-                )
-                self.send_error(500, "HMI illustration asset unavailable")
-                return
-
+        asset_name = self.path.removeprefix("/assets/")
+        if self.path.startswith("/assets/") and asset_name in self.script_assets:
+            body = self.script_assets[asset_name]
             self.send_response(200)
-            self.send_header(
-                "Content-Type",
-                "text/javascript; charset=utf-8"
-                if asset_path.suffix == ".js"
-                else "image/svg+xml" if asset_path.suffix == ".svg" else "image/png",
-            )
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

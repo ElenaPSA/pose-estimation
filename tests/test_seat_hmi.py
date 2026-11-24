@@ -214,73 +214,14 @@ def test_hmi_serves_dashboard_locally() -> None:
             "seat-reference-definition.png",
             "seat-reference-ranges.png",
             "seat-side-motion.svg",
+            "driver-seat-profile.png",
+            "automotive-seat-adjustment-scheme.png",
+            "automotive-seat-proposed-overlay.png",
         ):
             connection.request("GET", f"/assets/{name}")
             asset_response = connection.getresponse()
-            body = asset_response.read()
-            assert asset_response.status == 200
-            expected_type = "image/svg+xml" if name.endswith(".svg") else "image/png"
-            assert asset_response.getheader("Content-Type") == expected_type
-            assert body
-
-        connection.request("GET", "/assets/driver-seat-profile.png")
-        image_response = connection.getresponse()
-        image_bytes = image_response.read()
-        assert image_response.status == 200
-        assert image_response.getheader("Content-Type") == "image/png"
-        assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-        asset_path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "driver_pose_estimation"
-            / "assets"
-            / "driver-seat-profile.png"
-        )
-        assert image_bytes == asset_path.read_bytes()
-
-        connection.request("GET", "/assets/automotive-seat-adjustment-scheme.png")
-        scheme_response = connection.getresponse()
-        scheme_bytes = scheme_response.read()
-        assert scheme_response.status == 200
-        assert scheme_response.getheader("Content-Type") == "image/png"
-        assert scheme_bytes.startswith(b"\x89PNG\r\n\x1a\n")
-        scheme_path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "driver_pose_estimation"
-            / "assets"
-            / "automotive-seat-adjustment-scheme.png"
-        )
-        assert scheme_bytes == scheme_path.read_bytes()
-        scheme_image = cv2.imdecode(
-            np.frombuffer(scheme_bytes, dtype=np.uint8),
-            cv2.IMREAD_COLOR,
-        )
-        assert scheme_image is not None
-        fixed_seat_pixel = scheme_image[450, 200]
-        assert max(fixed_seat_pixel) - min(fixed_seat_pixel) < 5
-        assert 55 <= int(fixed_seat_pixel.mean()) <= 100
-        inset_seat_pixel = scheme_image[180, 850]
-        assert int(inset_seat_pixel.mean()) < 110
-        assert scheme_image[300, 502, 0] > 200
-        assert scheme_image[543, 300, 2] > 200
-
-        connection.request("GET", "/assets/automotive-seat-proposed-overlay.png")
-        overlay_response = connection.getresponse()
-        overlay_bytes = overlay_response.read()
-        assert overlay_response.status == 200
-        assert overlay_response.getheader("Content-Type") == "image/png"
-        overlay_image = cv2.imdecode(
-            np.frombuffer(overlay_bytes, dtype=np.uint8),
-            cv2.IMREAD_UNCHANGED,
-        )
-        assert overlay_image is not None
-        assert overlay_image.shape == (768, 1152, 4)
-        assert np.any(overlay_image[:, :, 3] == 0)
-        assert np.any(overlay_image[:, :, 3] > 0)
-        assert np.all(overlay_image[:, 780:, 3] == 0)
-        orange_pixel = overlay_image[450, 200, :3]
-        assert int(orange_pixel[2]) > int(orange_pixel[1]) > int(orange_pixel[0])
+            assert asset_response.status == 404
+            asset_response.read()
 
         connection.request("GET", "/missing")
         missing_response = connection.getresponse()
