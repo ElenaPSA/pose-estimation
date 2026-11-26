@@ -31,9 +31,6 @@ src/driver_pose_estimation.egg-info/requires.txt
 src/driver_pose_estimation.egg-info/top_level.txt
 src/driver_pose_estimation/assets/LICENSE-yunet.txt
 src/driver_pose_estimation/assets/face_detection_yunet_2023mar.onnx
-src/driver_pose_estimation/assets/profile-mannequin-athletic.png
-src/driver_pose_estimation/assets/profile-mannequin-robust.png
-src/driver_pose_estimation/assets/profile-mannequin.png
 src/driver_pose_estimation/assets/seat-studio.js
 src/driver_pose_estimation/assets/video-capture.js
 tests/test_camera_calibration.py

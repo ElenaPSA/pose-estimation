@@ -5,9 +5,13 @@ import base64
 import binascii
 import json
 import logging
+import os
+import shutil
 import socket
 import subprocess
 import tempfile
+import threading
+import time
 import webbrowser
 from collections.abc import Callable
 from http import HTTPStatus
@@ -56,6 +60,125 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 6000
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 FULL_BODY_CONFIDENCE_THRESHOLD = 0.70
+DEFAULT_CAMERA_PORT = 5000
+DEFAULT_CAMERA_DECODER = "avdec_h264 max-threads=1"
+CAMERA_FRAME_MAX_AGE_S = 2.0
+
+
+def find_gst_launch() -> str | None:
+    path = shutil.which("gst-launch-1.0")
+    if path:
+        return path
+    for variable in ("GSTREAMER_1_0_ROOT_MSVC_X86_64", "GSTREAMER_1_0_ROOT_X86_64"):
+        root = os.environ.get(variable)
+        if root:
+            candidate = os.path.join(root, "bin", "gst-launch-1.0.exe")
+            if os.path.exists(candidate):
+                return candidate
+    return None
+
+
+class UdpCameraStream:
+    """Receives the Jetson RTP/H.264 UDP stream with GStreamer and keeps the latest JPEG frame."""
+
+    def __init__(
+        self,
+        port: int = DEFAULT_CAMERA_PORT,
+        decoder: str = DEFAULT_CAMERA_DECODER,
+        gst_launch: str | None = None,
+    ) -> None:
+        self.port = port
+        self.decoder = decoder
+        self.gst_launch = gst_launch
+        self._lock = threading.Lock()
+        self._frame: bytes | None = None
+        self._frame_id = 0
+        self._frame_time = 0.0
+        self._process: subprocess.Popen[bytes] | None = None
+        self._reader: threading.Thread | None = None
+
+    def pipeline(self) -> list[str]:
+        return [
+            self.gst_launch or "gst-launch-1.0", "-q", "-e",
+            "udpsrc", f"port={self.port}",
+            "caps=application/x-rtp,media=video,encoding-name=H264,payload=96", "!",
+            "rtpjitterbuffer", "latency=0", "drop-on-latency=true", "!",
+            "rtph264depay", "!", "h264parse", "!",
+            *self.decoder.split(), "!",
+            "videoconvert", "!",
+            "jpegenc", "quality=90", "!",
+            "fdsink", "fd=1", "sync=false",
+        ]
+
+    def start(self) -> None:
+        self._process = subprocess.Popen(
+            self.pipeline(), stdout=subprocess.PIPE, stdin=subprocess.DEVNULL
+        )
+        self._reader = threading.Thread(
+            target=self._read_frames,
+            args=(self._process.stdout,),
+            name=f"udp-camera-{self.port}",
+            daemon=True,
+        )
+        self._reader.start()
+
+    @property
+    def running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def _read_frames(self, stream) -> None:
+        buffer = bytearray()
+        while chunk := stream.read1(1024 * 1024):
+            buffer.extend(chunk)
+            self._extract_frames(buffer)
+        if self._process is not None:
+            logger.warning(
+                "GStreamer camera receiver on UDP port %s exited with status %s",
+                self.port,
+                self._process.poll(),
+            )
+
+    def _extract_frames(self, buffer: bytearray) -> None:
+        while True:
+            start = buffer.find(b"\xff\xd8")
+            if start < 0:
+                del buffer[:-1]
+                return
+            end = buffer.find(b"\xff\xd9", start + 2)
+            if end < 0:
+                del buffer[:start]
+                return
+            self.publish(bytes(buffer[start : end + 2]))
+            del buffer[: end + 2]
+
+    def publish(self, jpeg: bytes) -> None:
+        with self._lock:
+            self._frame = jpeg
+            self._frame_id += 1
+            self._frame_time = time.monotonic()
+
+    def latest(self) -> tuple[bytes, int] | None:
+        with self._lock:
+            if (
+                self._frame is None
+                or time.monotonic() - self._frame_time > CAMERA_FRAME_MAX_AGE_S
+            ):
+                return None
+            return self._frame, self._frame_id
+
+    def stop(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        if self._reader is not None:
+            self._reader.join(timeout=2)
 
 HTML = r"""<!doctype html>
 <html lang="en">
@@ -386,6 +509,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <label for="videoFile">Driver video</label>
           <input id="videoFile" type="file" accept="video/*">
           <div id="videoFileStatus" class="upload-status">No video selected.</div>
+          <div id="liveCameraControls" hidden>
+            <button id="liveCameraButton" class="upload-submit" type="button">Use live camera</button>
+            <div id="liveCameraStatus" class="upload-status"></div>
+          </div>
           <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;object-fit:contain" aria-label="Uploaded video preview"></video>
           <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;object-fit:contain">
         </div>
@@ -895,15 +1022,53 @@ class _HmiHandler(BaseHTTPRequestHandler):
         for name in ("video-capture.js", "seat-studio.js")
     }
     image_assets: ClassVar[dict[str, bytes]] = {
-        name: (Path(__file__).parent / "assets" / name).read_bytes()
-        for name in ("profile-mannequin.png", "profile-mannequin-athletic.png", "profile-mannequin-robust.png")
+        path.name: path.read_bytes()
+        for path in (
+            Path(__file__).parent / "assets" / name
+            for name in ("profile-mannequin.png", "profile-mannequin-athletic.png", "profile-mannequin-robust.png")
+        )
+        if path.is_file()
     }
     pose_estimator: ClassVar[DriverPoseEstimator | None] = None
     face_detector: ClassVar[FaceHeightDetector | None] = None
     demo_video_path: ClassVar[Path] = Path("rotated_1.mp4")
+    camera: ClassVar[UdpCameraStream | None] = None
 
     def do_GET(self) -> None:
         request_path = urlsplit(self.path).path
+        if request_path == "/camera-status":
+            camera = self.camera
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "enabled": camera is not None,
+                    "port": camera.port if camera is not None else None,
+                    "running": camera is not None and camera.running,
+                    "receiving": camera is not None and camera.latest() is not None,
+                },
+            )
+            return
+        if request_path == "/camera-frame":
+            frame = self.camera.latest() if self.camera is not None else None
+            if frame is None:
+                self._send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {
+                        "error": "Live camera disabled."
+                        if self.camera is None
+                        else f"No frame received on UDP port {self.camera.port}."
+                    },
+                )
+                return
+            jpeg, frame_id = frame
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(jpeg)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Id", str(frame_id))
+            self.end_headers()
+            self.wfile.write(jpeg)
+            return
         if request_path == "/demo-video":
             try:
                 stream = self.demo_video_path.open("rb")
@@ -1909,13 +2074,49 @@ def run() -> None:
         action="store_true",
         help="Open the hands-free demonstration using local rotated_1.mp4",
     )
+    parser.add_argument(
+        "--camera-port",
+        type=int,
+        nargs="?",
+        const=DEFAULT_CAMERA_PORT,
+        help=(
+            "Enable the live camera received as RTP/H.264 over UDP with GStreamer "
+            f"(default port when given without a value: {DEFAULT_CAMERA_PORT})"
+        ),
+    )
+    parser.add_argument(
+        "--camera-decoder",
+        default=DEFAULT_CAMERA_DECODER,
+        help="H.264 decoder element, e.g. 'd3d11h264dec' for GPU decoding on Windows",
+    )
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
+    if args.camera_port is not None and not 1 <= args.camera_port <= 65535:
+        parser.error("--camera-port must be between 1 and 65535")
+
+    camera = None
+    if args.camera_port is not None:
+        gst_launch = find_gst_launch()
+        if gst_launch is None:
+            parser.exit(
+                1,
+                "gst-launch-1.0 not found. Install the GStreamer MSVC 64-bit runtime "
+                "(Complete install) from gstreamer.freedesktop.org and reopen the terminal.\n",
+            )
+        camera = UdpCameraStream(args.camera_port, args.camera_decoder, gst_launch)
+        try:
+            camera.start()
+        except OSError as error:
+            parser.exit(1, f"Could not start GStreamer: {error}\n")
+        _HmiHandler.camera = camera
+        print(f"Listening for live camera stream on UDP port {args.camera_port}.")
 
     try:
       server = _HmiServer(("127.0.0.1", args.port), _HmiHandler)
     except OSError as error:
+      if camera is not None:
+        camera.stop()
       parser.exit(
         1,
         f"Cannot start HMI on port {args.port}: {error}. "
@@ -1931,6 +2132,8 @@ def run() -> None:
         print("\nStopping seat HMI prototype.")
     finally:
         server.server_close()
+        if camera is not None:
+            camera.stop()
 
 
 if __name__ == "__main__":

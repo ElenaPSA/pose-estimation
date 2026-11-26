@@ -18,7 +18,13 @@ from driver_pose_estimation.models import (
     Keypoint,
     PoseDetection,
 )
-from driver_pose_estimation.seat_hmi import HTML, MorphologyAnalyzer, _HmiHandler, _HmiServer
+from driver_pose_estimation.seat_hmi import (
+    HTML,
+    MorphologyAnalyzer,
+    UdpCameraStream,
+    _HmiHandler,
+    _HmiServer,
+)
 
 
 def test_hmi_contains_driver_profiles_and_seat_studio_without_height() -> None:
@@ -1012,6 +1018,47 @@ def test_video_probe_and_uncalibrated_analysis(monkeypatch, tmp_path) -> None:
         assert "No high-confidence complete-body frame" in events[-1]["error"]
         assert "Required confidence is 70%" in events[-1]["error"]
         assert list(tmp_path.iterdir()) == [video_path]
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_hmi_serves_latest_udp_camera_frame(monkeypatch) -> None:
+    camera = UdpCameraStream(5000)
+    pipeline = camera.pipeline()
+    assert "port=5000" in pipeline and "jpegenc" in pipeline
+    first = b"\xff\xd8first\xff\xd9"
+    second = b"\xff\xd8second\xff\xd9"
+    buffer = bytearray(b"noise" + first + second[:5])
+    camera._extract_frames(buffer)
+    assert camera.latest() == (first, 1)
+    buffer.extend(second[5:])
+    camera._extract_frames(buffer)
+    assert camera.latest() == (second, 2)
+    assert not buffer
+
+    server = HTTPServer(("127.0.0.1", 0), _HmiHandler)
+    thread = Thread(target=server.serve_forever)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    try:
+        connection.request("GET", "/camera-frame")
+        disabled = connection.getresponse()
+        disabled.read()
+        assert disabled.status == 503
+
+        monkeypatch.setattr(_HmiHandler, "camera", camera)
+        connection.request("GET", "/camera-status")
+        status = json.loads(connection.getresponse().read())
+        assert status["enabled"] and status["receiving"] and status["port"] == 5000
+        connection.request("GET", "/camera-frame")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "image/jpeg"
+        assert response.getheader("X-Frame-Id") == "2"
+        assert response.read() == second
     finally:
         connection.close()
         server.shutdown()

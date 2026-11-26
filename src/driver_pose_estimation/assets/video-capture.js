@@ -55,7 +55,29 @@ const VideoCapture = (() => {
     const status = document.getElementById("profileStatus");
     const preview = document.getElementById("decodedVideoPreview");
     let controller = null, url = null;
+    const liveControls = document.getElementById("liveCameraControls");
+    const liveButton = document.getElementById("liveCameraButton");
+    const liveStatus = document.getElementById("liveCameraStatus");
+    let liveController = null;
+    if (liveControls && liveButton) {
+      fetch("/camera-status", {cache: "no-store"})
+        .then(response => response.ok ? response.json() : null)
+        .then(camera => {
+          if (!camera?.enabled) return;
+          liveButton.textContent = `Use live camera (UDP ${camera.port})`;
+          liveStatus.textContent = camera.receiving
+            ? "Camera stream received."
+            : `Waiting for camera stream on UDP port ${camera.port}.`;
+          liveControls.hidden = false;
+          liveButton.addEventListener("click", () => {
+            if (liveController) liveController.abort();
+            else scanLiveCamera(camera.port);
+          });
+        })
+        .catch(() => {});
+    }
     window.addEventListener("pagehide", () => {
+      liveController?.abort();
       controller?.abort();
       if (url) URL.revokeObjectURL(url);
     });
@@ -65,6 +87,7 @@ const VideoCapture = (() => {
       controller = new AbortController();
       const {signal} = controller;
       input.disabled = true;
+      if (liveButton) liveButton.disabled = true;
       reset();
       video.hidden = true;
       preview.hidden = true;
@@ -318,11 +341,122 @@ const VideoCapture = (() => {
         scanVideo.removeAttribute("src");
         scanVideo.load();
         input.disabled = false;
+        if (liveButton) liveButton.disabled = false;
         input.value = "";
         controller = null;
       }
     }
     input.addEventListener("change", () => load(input.files[0]));
+    async function scanLiveCamera(port) {
+      if (controller) return;
+      liveController = new AbortController();
+      const {signal} = liveController;
+      const label = liveButton.textContent;
+      liveButton.textContent = "Stop live camera";
+      input.disabled = true;
+      reset();
+      video.pause();
+      video.hidden = true;
+      preview.hidden = false;
+      const started = performance.now();
+      let lastFrameId = null;
+      let confirmations = 0;
+      let trackedBox = null;
+      let recentObservations = [];
+      let frozenObservation = null;
+      const heightSamples = [];
+      let reason = "No suitable person detected.";
+      try {
+        while (true) {
+          signal.throwIfAborted();
+          const frameResponse = await fetch("/camera-frame", {signal, cache: "no-store"});
+          const frameId = frameResponse.headers.get("X-Frame-Id");
+          if (!frameResponse.ok || frameId === lastFrameId) {
+            await frameResponse.body?.cancel();
+            if (!frameResponse.ok) {
+              liveStatus.textContent = `Waiting for camera stream on UDP port ${port}…`;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+          lastFrameId = frameId;
+          liveStatus.textContent = "Camera stream received.";
+          const blob = await frameResponse.blob();
+          const image = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error("Could not read the camera frame."));
+            reader.readAsDataURL(blob);
+          });
+          const timestamp = (performance.now() - started) / 1000;
+          preview.src = image;
+          if (!frozenObservation) progress(image, timestamp);
+          status.textContent = `Live camera at ${timestamp.toFixed(1)} s. ${reason}`;
+          const response = await fetch("/probe-frame", {
+            method: "POST",
+            signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({frontal: {image}})
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Full-body search failed.");
+          signal.throwIfAborted();
+          const currentBox = result.track_box;
+          const liveCandidate = result.eligible && result.confident && currentBox;
+          const sameTrack = trackedBox ? samePerson(trackedBox, currentBox) : Boolean(liveCandidate);
+          if (sameTrack) trackedBox = currentBox;
+          if (liveCandidate && sameTrack) {
+            const observation = {
+              image,
+              timestamp,
+              quality: Number(result.quality_score) || 0,
+              nearCamera: Boolean(result.near_camera),
+              height: result.height_cm
+            };
+            recentObservations.push(observation);
+            if (recentObservations.length > 3) recentObservations.shift();
+            confirmations = recentObservations.length;
+            if ((frozenObservation || confirmations >= 2) && observation.nearCamera &&
+                Number.isFinite(observation.height)) {
+              if (!frozenObservation) {
+                frozenObservation = recentObservations.reduce(
+                  (best, candidate) => candidate.quality > best.quality ? candidate : best
+                );
+                await frozen(frozenObservation.image, frozenObservation.timestamp, signal);
+              }
+              heightSamples.push(observation.height);
+              if (heightSamples.length >= 5) {
+                status.textContent = `Analyzing the frozen frame and ${heightSamples.length} close-up height measurements…`;
+                await captured(frozenObservation.image, frozenObservation.timestamp, signal, false, heightSamples);
+                return;
+              }
+              reason = `Collecting close-up height measurements: ${heightSamples.length}/5.`;
+            } else if (!frozenObservation) {
+              reason = observation.nearCamera
+                ? `Near-camera frame confirmed ${confirmations}/2 times.`
+                : "Complete body tracked. Move closer to the camera.";
+            }
+          } else if (!frozenObservation) {
+            recentObservations = [];
+            confirmations = 0;
+            reason = result.eligible && sameTrack
+              ? "Detection confidence is below the required level."
+              : result.reason || "The detected person changed or was not confirmed.";
+          }
+          status.textContent = `Live camera at ${timestamp.toFixed(1)} s. ${reason}`;
+        }
+      } catch (error) {
+        failed();
+        status.textContent = signal.aborted ? "Live camera analysis stopped." :
+          error.name === "TimeoutError" ? "Local inference timed out. Check the server/model setup and try again." :
+          error.message || "Live camera processing failed.";
+        document.getElementById("detectionStatus").textContent = status.textContent;
+      } finally {
+        liveButton.textContent = label;
+        input.disabled = false;
+        liveController = null;
+      }
+    }
     return {load};
   }
   return {mount, sampleTimes};
