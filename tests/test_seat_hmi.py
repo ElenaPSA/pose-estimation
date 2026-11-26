@@ -61,11 +61,10 @@ def test_hmi_contains_driver_profiles_and_seat_studio_without_height() -> None:
     assert 'id="decodedVideoPreview"' in HTML
     assert 'id="cancelVideo"' not in HTML
     assert "SIMULATED CAMERA ESTIMATE · NOT CALIBRATED" not in HTML
-    assert "fx 830 px, fy 1078 px, cx 964 px, cy 544 px at 1928 × 1088" in HTML
-    assert "Mirror position: X 74 cm, Y -85 cm, Z 87 cm" in HTML
-    assert "camera height above ground: 115 cm" in HTML
-    assert "yaw +93° from forward toward vehicle-left, effective pitch −11.5°, roll −0.1°" in HTML
-    assert "differs from the user-supplied −15°" in HTML
+    assert 'id="cameraModelAssumptions"' in HTML
+    assert 'result.estimation_mode === "simulated_camera_geometry"' in HTML
+    assert 'textContent = result.warnings.join(" ")' in HTML
+    assert "accuracy on new people is not established" in HTML
     assert 'src="/assets/video-capture.js"' in HTML
     assert "VideoCapture.mount({" in HTML
     assert 'id="lateralFile"' not in HTML
@@ -137,6 +136,35 @@ def test_hmi_server_rejects_duplicate_port() -> None:
                 pass
 
 
+def test_automatic_demo_serves_only_fixed_video(monkeypatch, tmp_path) -> None:
+    video = tmp_path / "rotated_1.mp4"
+    video.write_bytes(b"local demo video")
+    monkeypatch.setattr(_HmiHandler, "demo_video_path", video)
+    with HTTPServer(("127.0.0.1", 0), _HmiHandler) as server:
+        thread = Thread(target=server.serve_forever)
+        thread.start()
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        try:
+            connection.request("GET", "/?auto=1")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert "AUTOMATIC DEMO" in response.read().decode()
+            connection.request("GET", "/demo-video?file=another.mp4")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert response.getheader("Content-Type") == "video/mp4"
+            assert response.read() == b"local demo video"
+            monkeypatch.setattr(_HmiHandler, "demo_video_path", tmp_path / "missing.mp4")
+            connection.request("GET", "/demo-video")
+            response = connection.getresponse()
+            assert response.status == 404
+            assert b"unavailable" in response.read()
+        finally:
+            connection.close()
+            server.shutdown()
+            thread.join(timeout=2)
+
+
 def test_hmi_uses_script_snapshot_when_asset_changes(monkeypatch) -> None:
     original_read_bytes = Path.read_bytes
 
@@ -160,6 +188,38 @@ def test_hmi_uses_script_snapshot_when_asset_changes(monkeypatch) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("category", ["athletic", "robust"])
+def test_mannequin_variants_change_proportions_without_resizing_head_or_legs(category) -> None:
+    original = cv2.imdecode(
+        np.frombuffer(_HmiHandler.image_assets["profile-mannequin.png"], dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    variant = cv2.imdecode(
+        np.frombuffer(_HmiHandler.image_assets[f"profile-mannequin-{category}.png"], dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    assert original is not None and variant is not None
+    assert variant.shape[0] == original.shape[0]
+    margin = (variant.shape[1] - original.shape[1]) // 2
+    aligned = variant[:, margin:margin + original.shape[1]]
+    np.testing.assert_array_equal(aligned[:29], original[:29])
+    np.testing.assert_array_equal(aligned[123:], original[123:])
+
+    original_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+    variant_gray = cv2.cvtColor(variant, cv2.COLOR_BGR2GRAY)
+    shoulder_ratio = np.ptp(np.flatnonzero(variant_gray[42] > 45)) / np.ptp(
+        np.flatnonzero(original_gray[42] > 45)
+    )
+    original_torso_width = np.ptp(np.flatnonzero(original_gray[76] > 45))
+    variant_torso_width = np.ptp(np.flatnonzero(variant_gray[76] > 45))
+    if category == "athletic":
+        assert shoulder_ratio >= 1.25
+        assert variant_torso_width <= original_torso_width * .85
+    else:
+        assert shoulder_ratio >= 1.15
+        assert variant_torso_width >= original_torso_width * 1.4
 
 
 def test_hmi_serves_dashboard_locally() -> None:
@@ -211,6 +271,12 @@ def test_hmi_serves_dashboard_locally() -> None:
         assert "Video scan complete. Analyzing the closest complete frame" in video_source
         assert 'document.getElementById("cancelVideo")' not in video_source
         assert video_source.index("await video.play();") < video_source.index('fetch("/probe-frame"')
+        for name, expected in _HmiHandler.image_assets.items():
+            connection.request("GET", f"/assets/{name}")
+            image_response = connection.getresponse()
+            assert image_response.status == 200
+            assert image_response.getheader("Content-Type") == "image/png"
+            assert image_response.read() == expected
         for name in (
             "seat-reference-side.png",
             "seat-reference-definition.png",
@@ -564,6 +630,48 @@ def test_video_analysis_uses_reported_camera_height(
         result["morphology_reference_span_cm"] * 170 / expected_height, abs=.2
     )
     assert median_result["height_sensitivity_range_cm"][1] == pytest.approx(170 * 1.25 / 1.15, abs=.1)
+
+
+def test_portrait_probe_and_analysis_share_reference_fit(monkeypatch) -> None:
+    class Estimator:
+        def estimate(self, image, *args):
+            result = video_pose()
+            result.driver.bounding_box = BoundingBox(135, 25.6, 315, 601.6, .95)
+            result.driver.keypoints = [
+                Keypoint(point.index, point.name, point.x * 1.8, point.y * 2.56, .9)
+                for point in result.driver.keypoints
+            ]
+            return result
+
+    class FaceDetector:
+        def detect(self, image, pose):
+            return None
+
+    monkeypatch.setattr(_HmiHandler, "pose_estimator", Estimator())
+    monkeypatch.setattr(_HmiHandler, "face_detector", FaceDetector())
+    image = np.zeros((640, 360, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    handler = object.__new__(_HmiHandler)
+    payload = {
+        "mode": "video_demo",
+        "frontal": {"image": "data:image/png;base64," + base64.b64encode(encoded).decode()},
+    }
+
+    probe = handler._probe_image(image)
+    analysis = handler._analyze_payload(payload)
+
+    assert probe["eligible"] and probe["confident"] and probe["near_camera"]
+    assert analysis["height_cm"] == round(probe["height_cm"], 1)
+    assert analysis["calibration_mode"] == "reference_height_fit"
+    assert any("EMPIRICAL REFERENCE-HEIGHT FIT" in w for w in analysis["warnings"])
+    assert not any("FOV SPECIFICATION MISMATCH" in w for w in analysis["warnings"])
+    supplied = handler._analyze_payload({
+        **payload,
+        "camera_calibration": CameraCalibration.simulated_for_image((360, 640)).to_dict(),
+    })
+    assert supplied["calibration_mode"] == "vehicle_camera"
+    assert supplied["height_cm"] != analysis["height_cm"]
 
 
 @pytest.mark.parametrize("samples", [[True], [float("nan")], [79], [261], [150] * 6, "170"])

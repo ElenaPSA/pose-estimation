@@ -36,7 +36,7 @@ driver-camera-calibrate = "driver_pose_estimation.camera_calibration:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-driver_pose_estimation = ["assets/*.js", "assets/*.onnx", "assets/*.txt"]
+driver_pose_estimation = ["assets/*.js", "assets/*.onnx", "assets/*.txt", "assets/profile-mannequin*.png"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

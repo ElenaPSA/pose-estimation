@@ -6,7 +6,7 @@ import argparse
 import glob
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -42,6 +42,17 @@ SIMULATED_CAMERA_PITCH_DEG = -11.5
 SIMULATED_CAMERA_ROLL_DEG = -0.1
 CAMERA_PITCH_SEARCH_RANGE_DEG = (-15.0, -5.0)
 CAMERA_ROLL_SEARCH_RANGE_DEG = (-3.0, 3.0)
+REFERENCE_VIDEO_IMAGE_SIZE_PX = (1080, 1920)
+REFERENCE_VIDEO_FX_PX = 1074.0009061782127
+REFERENCE_VIDEO_FY_PX = 2051.1354466621287
+REFERENCE_VIDEO_PITCH_DEG = -5.8572611145829745
+REFERENCE_VIDEO_ROLL_DEG = -8.519068841528615
+REFERENCE_VIDEO_HORIZONTAL_FOV_DEG = math.degrees(
+    2 * math.atan(REFERENCE_VIDEO_IMAGE_SIZE_PX[0] / (2 * REFERENCE_VIDEO_FX_PX))
+)
+REFERENCE_VIDEO_VERTICAL_FOV_DEG = math.degrees(
+    2 * math.atan(REFERENCE_VIDEO_IMAGE_SIZE_PX[1] / (2 * REFERENCE_VIDEO_FY_PX))
+)
 
 
 class CameraCalibrationError(ValueError):
@@ -284,6 +295,38 @@ class CameraCalibration:
                 REPORTED_DIAGONAL_FOV_DEG if rotated_image or matches_camera_aspect else None
             ),
             ground_plane_z_m=MIRROR_CAMERA_POSITION_VEHICLE_M[2] - camera_height_m,
+        )
+
+    @staticmethod
+    def matches_reference_video_size(image_size_px: tuple[int, int]) -> bool:
+        width, height = image_size_px
+        return width > 0 and height > 0 and abs(
+            width / height - REFERENCE_VIDEO_IMAGE_SIZE_PX[0] / REFERENCE_VIDEO_IMAGE_SIZE_PX[1]
+        ) <= 1e-3
+
+    @classmethod
+    def simulated_video_for_image(
+        cls, image_size_px: tuple[int, int]
+    ) -> CameraCalibration:
+        """Use the shared reference-height fit only for matching portrait videos."""
+        if not cls.matches_reference_video_size(image_size_px):
+            return cls.simulated_for_image(image_size_px)
+        width, height = image_size_px
+        base = cls.simulated_for_image(
+            image_size_px,
+            pitch_deg=REFERENCE_VIDEO_PITCH_DEG,
+            roll_deg=REFERENCE_VIDEO_ROLL_DEG,
+        )
+        return replace(
+            base,
+            camera_matrix=np.asarray([
+                [REFERENCE_VIDEO_FX_PX * width / REFERENCE_VIDEO_IMAGE_SIZE_PX[0], 0, width / 2],
+                [0, REFERENCE_VIDEO_FY_PX * height / REFERENCE_VIDEO_IMAGE_SIZE_PX[1], height / 2],
+                [0, 0, 1],
+            ], dtype=np.float64),
+            horizontal_fov_deg=REFERENCE_VIDEO_HORIZONTAL_FOV_DEG,
+            vertical_fov_deg=REFERENCE_VIDEO_VERTICAL_FOV_DEG,
+            reported_diagonal_fov_deg=None,
         )
 
     def to_dict(self) -> dict[str, Any]:

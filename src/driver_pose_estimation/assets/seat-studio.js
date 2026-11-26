@@ -13,6 +13,7 @@ const SeatStudio = (() => {
   let target = null;
   let frame = null;
   let generation = 0;
+  let animationComplete = null;
   const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function compute(height, torsoCm = null) {
@@ -209,7 +210,7 @@ const SeatStudio = (() => {
           ["z", "02", "Seat Height", "seatHeight", "mm", "0&ndash;80 mm above lowest"],
           ["x", "03", "Seat Depth", "seatDepth", "mm", "0&ndash;255 mm from rear stop"]].map(([key, n, name, id, unit, range]) => `
           <article class="movement-row"><div class="studio-card-heading"><span>${n} / ${key === "recline" ? "RECLINE" : key.toUpperCase()+" AXIS"}</span><span class="studio-direction">FRONT &rarr;</span></div>
-          <svg id="studio-card-${key}" viewBox="130 40 730 470" role="img" aria-label="${name}: orange target overlaid on gray nominal comfort reference, whole seat facing right"></svg>
+          <svg id="studio-card-${key}" viewBox="130 40 630 480" role="img" aria-label="${name}: orange target overlaid on gray nominal comfort reference, whole seat facing right"></svg>
           <div class="studio-card-copy"><span class="movement-label">${name}</span><output aria-label="${name} movement from nominal comfort reference"><b id="${id}"></b><small${key === "recline" ? ' class="angle-unit"' : ""}>${unit}</small></output>
           <span id="studio-delta-${key}" class="studio-delta"></span><span id="studio-target-${key}" class="studio-range"></span>
           <span class="studio-range">Vehicle travel limit: ${range}</span>
@@ -252,6 +253,8 @@ const SeatStudio = (() => {
       target.recline === null ? "—" : signed(change.recline);
   }
   function stop() {
+    if (animationComplete) animationComplete(false);
+    animationComplete = null;
     generation++;
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
@@ -311,8 +314,9 @@ const SeatStudio = (() => {
     live(target);
   }
   function play() {
-    if (!target) return;
+    if (!target) return Promise.resolve(false);
     stop();
+    const completion = new Promise(resolve => { animationComplete = resolve; });
     const run = generation;
     const end = {...target, recline: target.recline === null ? reference.recline : target.recline};
     const change = delta(end);
@@ -328,8 +332,10 @@ const SeatStudio = (() => {
         `Prototype model complete. Movements from assumed reference: X ${signed(change.x)} mm, Z ${signed(change.z)} mm. ${
           target.recline === null ? "Backrest estimate unavailable; displayed at reference." :
             `Illustrative backrest movement ${signed(change.recline)}°.`} No real seat movement.`;
+      animationComplete(true);
+      animationComplete = null;
     };
-    if (reducedMotion()) { finish(); return; }
+    if (reducedMotion()) { finish(); return completion; }
     const duration = 4200;
     let started;
     position("hero", reference);
@@ -358,6 +364,7 @@ const SeatStudio = (() => {
       else frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
+    return completion;
   }
-  return {mount, update, compute, delta, transform, limits, reference, fitAnchors, fittingRange, supports};
+  return {mount, update, play, stop, compute, delta, transform, limits, reference, fitAnchors, fittingRange, supports};
 })();

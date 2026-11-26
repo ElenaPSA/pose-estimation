@@ -1,3 +1,185 @@
+async function checkSeatPlaybackCompletion(api) {
+  api.update(178, 50);
+  const interrupted = api.play();
+  api.stop();
+  if (await interrupted !== false) throw new Error("Interrupted animation reported completion.");
+  if (await api.play() !== true) throw new Error("Animation did not report completion.");
+  if (document.getElementById("studioProgress").style.width !== "100%") {
+    throw new Error("Animation completed before the final frame.");
+  }
+  return ["Animation cancellation", "Animation completion after final frame"];
+}
+
+async function checkHmiStepSequences({analyze, advance, finishAnimation}) {
+  const activeScreen = () => document.querySelector('[data-screen][aria-pressed="true"]').dataset.screen;
+  const expectScreen = screen => {
+    if (activeScreen() !== screen) throw new Error(`Expected ${screen}, got ${activeScreen()}.`);
+  };
+  const first = await analyze();
+  expectScreen("capture");
+  await advance(5999);
+  expectScreen("capture");
+  await advance(1);
+  expectScreen("adjustments");
+  await advance(5999);
+  expectScreen("adjustments");
+  await advance(1);
+  expectScreen("animation");
+  await advance(6000);
+  expectScreen("animation");
+  await finishAnimation();
+  await advance(5999);
+  expectScreen("animation");
+  await advance(1);
+  expectScreen("reference");
+  await first.completion;
+
+  const second = await analyze();
+  expectScreen("capture");
+  await advance(12000);
+  expectScreen("animation");
+  const replacement = await analyze();
+  await second.completion;
+  expectScreen("capture");
+  await advance(6000);
+  expectScreen("adjustments");
+  document.querySelector('[data-screen="reference"]').click();
+  await replacement.completion;
+  await advance(6000);
+  expectScreen("reference");
+
+  const afterCancellation = await analyze();
+  expectScreen("capture");
+  await advance(6000);
+  expectScreen("adjustments");
+  document.querySelector('[data-screen="capture"]').click();
+  await afterCancellation.completion;
+  return [
+    "Six-second pauses and animation-completion wait",
+    "Every successful analysis restarts the sequence",
+    "Replacement analysis ignores stale animation cancellation",
+    "Manual cancellation does not disable the next analysis"
+  ];
+}
+
+function checkCaptureLayout() {
+  const video = document.getElementById("sourceVideo");
+  const frame = document.getElementById("morphologyFigureStage");
+  if (video.hidden || document.getElementById("morphologyFigure").hidden) {
+    throw new Error("Load and analyze a video before checking the capture layout.");
+  }
+  const videoRect = video.getBoundingClientRect();
+  const frameRect = frame.getBoundingClientRect();
+  const profile = document.querySelector(".profile-card").getBoundingClientRect();
+  const capture = document.getElementById("captureScreen").getBoundingClientRect();
+  const main = document.querySelector("main").getBoundingClientRect();
+  if (profile.top < Math.max(videoRect.bottom, frameRect.bottom)) {
+    throw new Error("Profile controls must be below both figures.");
+  }
+  if (capture.width < main.width * .98 || frameRect.width <= 0 || frameRect.height <= 0) {
+    throw new Error("Capture panels must use the available width and show the selected frame.");
+  }
+  if (videoRect.height < Math.min(innerHeight * .4, 650)) throw new Error("Video preview is too small.");
+  if (innerWidth >= 900 && Math.max(videoRect.bottom, frameRect.bottom) > innerHeight) {
+    throw new Error("Both figures should fit vertically in a desktop window.");
+  }
+  if (document.documentElement.scrollWidth > innerWidth + 1) {
+    throw new Error("Capture layout overflows the viewport horizontally.");
+  }
+  const heights = [...document.querySelectorAll("[data-size] .height-person")]
+    .map(body => body.getBoundingClientRect().height);
+  if (heights.length !== 3 || !(heights[0] < heights[1] && heights[1] < heights[2])) {
+    throw new Error("Size illustrations must show increasing human stature.");
+  }
+  const widths = [...document.querySelectorAll("[data-build] .build-torso")]
+    .map(body => body.getBoundingClientRect().width);
+  if (widths.length !== 3 || !(widths[1] < widths[0] && widths[1] < widths[2])) {
+    throw new Error("Build illustrations must show visibly different body proportions.");
+  }
+  if (getComputedStyle(document.querySelector(".size-icon")).fill ===
+      getComputedStyle(document.querySelector(".build-icon")).fill) {
+    throw new Error("Height and build illustrations must use distinct visual styles.");
+  }
+  for (const button of document.querySelectorAll("[data-size], [data-build]")) {
+    const icon = button.querySelector("svg");
+    if (!icon || icon.getAttribute("aria-hidden") !== "true" ||
+        icon.getAttribute("focusable") !== "false") {
+      throw new Error("Human illustrations must preserve the button's text-only accessible name.");
+    }
+    if (icon.getBoundingClientRect().height < 100 || !icon.querySelector(".mannequin")) {
+      throw new Error("Profile illustrations must be large enough to show their technical mannequins.");
+    }
+    if (icon.querySelector(".figure-skin, .figure-hair, .figure-trousers, .build-contour")) {
+      throw new Error("Profile mannequins must not retain character styling or muscle contours.");
+    }
+    const template = icon.querySelector("image");
+    if (!template || !template.getAttribute("href").startsWith("/assets/profile-mannequin")) {
+      throw new Error("Profile figures must use the supplied mannequin template.");
+    }
+  }
+  return ["Full-width figures", "Controls below figures", "Larger preview", "Distinct height and build illustrations", "Decorative human icons"];
+}
+
+function checkSeatAdjustmentLayout() {
+  if (document.getElementById("seatStudio").dataset.activeScreen !== "adjustments") {
+    throw new Error("Open Seat adjustments before checking its layout.");
+  }
+  const cards = [...document.querySelectorAll(".movement-row")];
+  if (cards.length !== 3) throw new Error("All three adjustment cards must remain available.");
+  for (const card of cards) {
+    const bounds = card.getBoundingClientRect();
+    const drawing = card.querySelector("svg").getBoundingClientRect();
+    const seat = card.querySelector(".studio-solid").getBoundingClientRect();
+    if (seat.height < drawing.width * .4) throw new Error("Seat drawing is too small for its card.");
+    if (innerWidth >= 900 && innerHeight >= 620 &&
+        (bounds.height < innerHeight * .6 || innerHeight - bounds.bottom > 120)) {
+      throw new Error("Adjustment cards must use the available vertical space.");
+    }
+    for (const element of card.querySelectorAll(".studio-solid, .studio-ghost, .studio-steering-wheel")) {
+      const figure = element.getBoundingClientRect();
+      if (figure.left < drawing.left || figure.right > drawing.right ||
+          figure.top < drawing.top || figure.bottom > drawing.bottom) {
+        throw new Error("Enlarged drawings must retain the whole seat and steering wheel.");
+      }
+    }
+  }
+  if (document.documentElement.scrollWidth > innerWidth + 1) {
+    throw new Error("Adjustment cards overflow the window horizontally.");
+  }
+  return ["Taller adjustment cards", "Larger seats", "Uncropped seats and wheels", "No horizontal overflow"];
+}
+
+function checkReferenceLayout() {
+  if (document.getElementById("seatStudio").dataset.activeScreen !== "reference") {
+    throw new Error("Open Reference details before checking its layout.");
+  }
+  const schema = document.getElementById("studioReferenceSchema");
+  const diagram = schema.getBoundingClientRect();
+  const container = schema.parentElement.getBoundingClientRect();
+  if (innerWidth > 900) {
+    if (diagram.width < document.querySelector("main").getBoundingClientRect().width * .6 ||
+        (innerHeight >= 620 && diagram.height < innerHeight * .6) ||
+        document.getElementById("reference-nominal").getBoundingClientRect().height <
+          Math.min(280, diagram.width * .38)) {
+      throw new Error("Reference diagram must use the available window space.");
+    }
+  } else if (document.querySelector(".studio-details > div:nth-child(2)")
+      .getBoundingClientRect().top < container.bottom) {
+    throw new Error("Reference explanations must move below the diagram in narrow windows.");
+  }
+  for (const element of schema.querySelectorAll("#reference-nominal, .studio-steering-wheel, text")) {
+    const bounds = element.getBoundingClientRect();
+    if (bounds.left < diagram.left || bounds.right > diagram.right ||
+        bounds.top < diagram.top || bounds.bottom > diagram.bottom) {
+      throw new Error("Reference seat, steering wheel and measurement labels must remain uncropped.");
+    }
+  }
+  if (document.documentElement.scrollWidth > innerWidth + 1) {
+    throw new Error("Reference details overflow the window horizontally.");
+  }
+  return ["Expanded reference diagram", "Uncropped seat and measurement labels", "Responsive explanations"];
+}
+
 function runSeatStudioChecks(api) {
   const checks = [];
   function check(name, callback) { callback(); checks.push(name); }

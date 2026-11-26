@@ -84,7 +84,19 @@ python -m driver_pose_estimation.seat_hmi --port 8766
 
 Each running server keeps its HTML and JavaScript version together. After changing code, stop the old server with `Ctrl+C` and launch it again. The HMI refuses to start if the requested port is already in use; stop the existing server or select a different port with `--port`.
 
+After every successful person analysis, including manually selected videos, the HMI automatically displays all four steps. It shows Video & profile for six seconds, Seat adjustments for six seconds, then opens Seat animation and plays it automatically. After the animation finishes, it waits six seconds and shows Reference details. Reduced-motion preferences are respected. Clicking a navigation tab, selecting a profile, or loading another video stops the current sequence. The next successful analysis starts a fresh sequence, even after a previous sequence was cancelled. Loading or analysis errors stop progression with a visible message.
+
+For a hands-free simulated camera demonstration, place `rotated_1.mp4` in the server's working directory and open `http://127.0.0.1:8766/?auto=1` (adjust the port as needed), or click **AUTOMATIC DEMO**. This option automatically loads the video; it is no longer required for automatic step progression. The normal URL retains manual video selection and navigation. The sample video remains a local, untracked file and is not included in the repository.
+
+To launch directly into this mode, run `python -m driver_pose_estimation.seat_hmi --port 8766 --auto-demo`.
+
 The browser plays the uploaded video while the right-hand figure mirrors playback. Live checks track the same person and require two consecutive complete-body detections before freezing a near-camera frame. A separate video element checks nearby frames within 0.8 seconds of that frozen frame; up to five eligible, confident, close-up observations of the same tracked person are used for the median height. The frozen frame supplies the morphology proportions and overlay, while the median height scales the dimensions and seat preview. The left video continues playing during analysis. The HMI reports the sample count; if no additional eligible frames are available it uses a single-frame estimate. Bounding-box tracking is not a guarantee of identity.
+
+The capture view uses the full window width for larger video and selected-person panels, with size and build controls below them. Video, detected-person and morphology preview heights are reduced by roughly 15% from the previous layout, with a 260-pixel minimum and 700-pixel maximum. Both profile groups use the supplied translucent-blue mannequin image, retaining its shading, contours and joint details. Size buttons scale the same template uniformly to illustrate increasing stature beside height rulers. Build buttons retain a common height: Average uses the original image, Athletic adapts it with broader shoulders and a narrower torso, and Robust uses broader shoulders and torso. These differences are deliberately exaggerated for visibility at icon size. Smooth, localized horizontal image warps leave the head and lower legs unchanged; these are illustrations, not measured anatomical models. The three bundled PNG assets are served locally. Existing labels and selection behavior are unchanged. These illustrations and heuristic build categories are not validated anthropometric classifications and do not assess sex, gender, fitness or health. Narrow windows stack the panels and controls without stretching the video or selected image.
+
+The three Seat adjustments cards expand vertically with desktop window height instead of capping their drawings at 185 pixels. A tighter drawing viewport enlarges the seats while retaining the complete nominal reference, target seat, steering wheel and coordinate labels. Small windows allow vertical scrolling rather than shrinking the seats back into thumbnails.
+
+Reference details similarly give the nominal-seat diagram most of the desktop width and a window-height-responsive drawing area. Explanations stay alongside it on wide windows and move below it on narrow windows; the seat, travel limits and measurement labels remain intact.
 
 If live checks do not find a near-camera frame or a stable complete frame, a separate video element scans up to four frames per second, capped at 240 samples. If no near-camera frame is found, the best stable complete frame is used alone. If Chromium cannot decode the source codec, the HMI uses bundled FFmpeg to make a local H.264/MP4 preview (downscaled to a maximum 640px side and 12fps); browser playback and frame checks use that preview. If transcoding is unavailable, the local OpenCV fallback scans up to four original frames per second, capped at 240 and at the source frame count, and shows sampled frames instead of synchronized full video playback. It freezes the first confirmed near-camera frame and collects up to five subsequent eligible close-up measurements of the same track. Brief appearances between checks may still be missed.
 
@@ -92,7 +104,31 @@ The HMI temporarily stores the upload and any transcoded preview in a system tem
 
 ## Height Estimate and Camera Assumptions
 
-For matching landscape frames and portrait frames assumed to be rotated from this camera, the HMI uses the supplied estimated intrinsics to form a pinhole camera matrix. These are not a full calibration:
+### Current 9:16 portrait-video model
+
+The HMI now uses one shared empirical camera model for the eight reference recordings and other matching 9:16 portrait frames, including resized browser previews:
+
+| Parameter | Reference-height fit |
+|---|---:|
+| Portrait horizontal / vertical FOV | 53.39 / 50.16 degrees |
+| Effective pitch / roll | -5.86 / -8.52 degrees |
+| Intrinsics at 1080 x 1920 | `fx = 1074.00 px`, `fy = 2051.14 px`, `cx = 540 px`, `cy = 960 px` |
+| Camera height above floor | 1.15 m |
+| Lens distortion | Assumed zero |
+
+This is **a reference-height fit, not a measured physical calibration**. Four shared parameters were fitted to people reported as 153, 163, 178 and 185 cm, with equal person weights, a centered principal point, focal regularization, and head/foot alignment penalties. FOV is not uniquely identified by these height labels and depends on fitting assumptions. The 4.3 m distance, 2.5 m width and 1.2 m vertical reference could not constrain reprojection without corresponding image points. No filename or identity-based correction is used.
+
+On the same accepted close-up frames reprocessed through the HMI API, person-balanced RMSE decreased from 10.1 to 3.9 cm. The 153 cm reference estimated 156.8 cm, the 163 cm reference 161.7-164.0 cm, the 178 cm reference 177.8 cm, and the 185 cm reference 174.5-187.7 cm. These are fitting-reference checks, not independent accuracy claims; browser timing/transcoding can change selected frames and results.
+
+A full browser playback check subsequently captured all eight videos with 2-5 samples each: 153 cm estimated 156.6 cm, 163 cm estimated 162.3/164.4 cm, 178 cm estimated 179.6 cm, and 185 cm estimated 182.3/185.3/188.8/182.4 cm. All four reference people received the expected size band in that run. These remain reference-recording results, not guaranteed tolerances.
+
+Probe checks, final analysis, multi-frame medians, morphology scaling and the seat preview use this same profile. The 0.25 m alignment rejection remains active. Existing seat-trial anchors at 163 and 185 cm are unchanged: improved height estimates feed the existing interpolation/extrapolation rather than inventing new comfort targets. The HMI labels the profile **Reference-fitted** and displays its assumptions.
+
+The profile assumes the same camera setup and uncropped portrait framing. Other aspect ratios retain the legacy simulation below. Explicit `camera_calibration` API input and the reference-marker workflow are unchanged.
+
+### Legacy simulation for other frame geometries
+
+For matching landscape frames and other portrait frames assumed to be rotated from this camera, the legacy profile uses the supplied estimated intrinsics to form a pinhole camera matrix. The following defaults and historical fitting results describe that legacy profile, not the current 9:16 portrait-video fit. These are not a full calibration:
 
 | Parameter | Default assumption |
 |---|---:|

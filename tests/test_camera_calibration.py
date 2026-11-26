@@ -176,6 +176,39 @@ def test_fitted_default_pose_estimates_reference_frame() -> None:
     assert estimate.height_cm == pytest.approx(156.64, abs=0.02)
 
 
+@pytest.mark.parametrize("image_size", [(1080, 1920), (360, 640)])
+@pytest.mark.parametrize(
+    ("head", "foot", "reference_cm"),
+    [
+        ((360.8671, 303.1293), (262.3540, 1665.6687), 153),
+        ((564.6566, 322.9962), (457.5709, 1684.5425), 163),
+        ((474.0869, 30.9250), (338.0220, 1867.3005), 178),
+        ((514.0261, 37.6575), (376.1293, 1714.4539), 185),
+    ],
+)
+def test_reference_video_fit_recovers_reference_frames_at_preview_sizes(
+    image_size, head, foot, reference_cm
+) -> None:
+    calibration = CameraCalibration.simulated_video_for_image(image_size)
+    scale = np.asarray(image_size) / (1080, 1920)
+    estimate = calibration.estimate_height_cm(
+        tuple(np.asarray(head) * scale),
+        tuple(np.asarray(foot) * scale),
+        image_size,
+    )
+
+    assert estimate.height_cm == pytest.approx(reference_cm, abs=5)
+    assert estimate.vertical_alignment_residual_m <= .25
+
+
+@pytest.mark.parametrize("image_size", [(1920, 1080), (640, 480), (200, 250)])
+def test_reference_video_fit_preserves_other_image_geometries(image_size) -> None:
+    legacy = CameraCalibration.simulated_for_image(image_size)
+    selected = CameraCalibration.simulated_video_for_image(image_size)
+
+    assert selected.to_dict() == legacy.to_dict()
+
+
 def test_yaw_changes_ground_coordinates_but_not_height() -> None:
     forward = CameraCalibration.simulated_for_image((1080, 1920), yaw_deg=0)
     left = CameraCalibration.simulated_for_image((1080, 1920), yaw_deg=70)

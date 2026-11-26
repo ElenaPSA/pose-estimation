@@ -59,9 +59,8 @@ const VideoCapture = (() => {
       controller?.abort();
       if (url) URL.revokeObjectURL(url);
     });
-    input.addEventListener("change", async () => {
-      const file = input.files[0];
-      if (!file) return;
+    async function load(file) {
+      if (!file || controller) return;
       fileStatus.textContent = `Selected video: ${file.name}`;
       controller = new AbortController();
       const {signal} = controller;
@@ -322,7 +321,9 @@ const VideoCapture = (() => {
         input.value = "";
         controller = null;
       }
-    });
+    }
+    input.addEventListener("change", () => load(input.files[0]));
+    return {load};
   }
   return {mount, sampleTimes};
 })();

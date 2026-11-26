@@ -14,31 +14,34 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import ClassVar, cast
+from urllib.parse import urlsplit
 
 import cv2
 import imageio_ffmpeg
 import numpy as np
 
 from .camera_calibration import (
-  CAMERA_IMAGE_SIZE_PX,
-  CAMERA_PITCH_SEARCH_RANGE_DEG,
-  CAMERA_ROLL_SEARCH_RANGE_DEG,
-  CameraCalibration,
-  CameraCalibrationError,
-  HeightEstimate,
-  SIMULATED_CX_PX,
-  SIMULATED_CY_PX,
-  SIMULATED_FX_PX,
-  SIMULATED_FY_PX,
-  SIMULATED_CAMERA_HEIGHT_M,
-  SIMULATED_CAMERA_HEIGHT_RANGE_M,
-  SIMULATED_CAMERA_PITCH_DEG,
-  SIMULATED_CAMERA_ROLL_DEG,
-  SIMULATED_CAMERA_YAW_DEG,
-  IMPLIED_DIAGONAL_FOV_DEG,
-  REPORTED_DIAGONAL_FOV_DEG,
-  SIMULATED_HORIZONTAL_FOV_DEG,
-  SIMULATED_VERTICAL_FOV_DEG,
+    CAMERA_IMAGE_SIZE_PX,
+    CAMERA_PITCH_SEARCH_RANGE_DEG,
+    CAMERA_ROLL_SEARCH_RANGE_DEG,
+    IMPLIED_DIAGONAL_FOV_DEG,
+    REFERENCE_VIDEO_PITCH_DEG,
+    REFERENCE_VIDEO_ROLL_DEG,
+    REPORTED_DIAGONAL_FOV_DEG,
+    SIMULATED_CAMERA_HEIGHT_M,
+    SIMULATED_CAMERA_HEIGHT_RANGE_M,
+    SIMULATED_CAMERA_PITCH_DEG,
+    SIMULATED_CAMERA_ROLL_DEG,
+    SIMULATED_CAMERA_YAW_DEG,
+    SIMULATED_CX_PX,
+    SIMULATED_CY_PX,
+    SIMULATED_FX_PX,
+    SIMULATED_FY_PX,
+    SIMULATED_HORIZONTAL_FOV_DEG,
+    SIMULATED_VERTICAL_FOV_DEG,
+    CameraCalibration,
+    CameraCalibrationError,
+    HeightEstimate,
 )
 from .config import Settings
 from .face_detector import FaceHeightDetector
@@ -63,7 +66,7 @@ HTML = r"""<!doctype html>
 <style>
 :root {
   color-scheme: dark;
-  --capture-media-height: clamp(220px, calc(100vh - 360px), 650px);
+  --capture-media-height: clamp(260px, calc(85vh - 255px), 700px);
   --bg: #060b12; --panel: #0d1724; --panel2: #111d2d; --line: #26364a;
   --text: #eaf1fb; --muted: #9aa9bc; --accent: #ffb16d;
   --cyan: #6cc7c2; --green: #79c58f; --amber: #d8a15a;
@@ -83,8 +86,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .top-right { color: var(--muted); text-align: right; font-size: 11px; }
 .prototype { color: #f2d9bc; border: 1px solid #6a4a2f; border-radius: 5px;
   padding: 7px 10px; white-space: nowrap; background: rgba(118, 91, 66, 0.38); font-weight: 750; letter-spacing: .04em; }
-.layout { display: grid; grid-template-columns: minmax(340px, .86fr) minmax(450px, 1.4fr);
-  gap: 22px; margin-top: 22px; }
+.layout { display: block; margin-top: 22px; }
 .left, .right { display: grid; gap: 15px; align-content: start; }
 .card { border: 1px solid var(--line); background: var(--panel);
   border-radius: 9px; padding: 18px 20px; box-shadow: 0 3px 12px rgba(2, 6, 12, 0.5); }
@@ -104,20 +106,22 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .range-wrap { padding: 0 6px; }
 .range-labels { display: flex; justify-content: space-between; padding: 0 4px;
   color: var(--muted); font-size: 10px; }
-.profiles, .body-types { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.profile-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.profiles, .body-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .choice { min-height: 88px; border: 1px solid var(--line); border-radius: 7px;
   background: #121f2f; cursor: pointer; padding: 10px 7px; text-align: center;
   transition: .15s ease; }
 .choice:hover { border-color: #58779a; background: #18273d; transform: translateY(-1px); }
 .choice.active { border: 2px solid var(--accent); background: #35271f; box-shadow: inset 0 -3px 0 var(--accent); }
-.person-icon { width: 31px; height: 31px; display: grid; place-items: center;
-  margin: 0 auto 4px; border-radius: 50%; color: #20150c; background: var(--accent);
-  font-size: 12px; line-height: 1; font-weight: 750; }
+.person-icon { display: block; width: min(100%, 90px); height: 112px; margin: 0 auto 6px;
+  stroke-linecap: round; stroke-linejoin: round; }
+.size-icon { fill: none; }
+.size-icon .height-guide, .build-icon .width-guide { fill: none; stroke: var(--cyan); stroke-width: 1; }
+.build-icon { fill: var(--accent); }
+.build-icon .width-guide { stroke: #dac0a1; }
 .choice strong { display: block; font-size: 12px; font-weight: 700; }
 .choice small { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
-.body-types .choice { min-height: 62px; padding-top: 9px; }
-.body-types .person-icon { width: 22px; height: 22px; margin-bottom: 3px;
-  font-size: 14px; color: #20150c; background: var(--accent); }
+.body-types .choice { min-height: 88px; }
 .slider-row { margin: 12px 0 3px; }
 .slider-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .slider-head output { color: var(--accent); font-weight: 700; }
@@ -129,7 +133,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .upload-view { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; }
 .upload-view label { display: block; font-size: 11px; font-weight: 700; }
+.upload-view input { display: block; max-width: 100%; margin-top: 4px; }
 .upload-view small { color: var(--muted); font-size: 10px; }
+#sourceVideo, #decodedVideoPreview { display: block; width: 100%; height: var(--capture-media-height);
+  object-fit: contain; margin-top: 8px; }
+#sourceVideo[hidden], #decodedVideoPreview[hidden] { display: none; }
 .detection-panel { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: #09131f; }
 .detection-title { color: var(--ink); font-size: 11px; font-weight: 700; }
 .detection-viewport { display: flex; justify-content: center; width: 100%; margin-top: 8px; }
@@ -187,8 +195,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .morphology-segment output { color: var(--ink); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .morphology-figure-note { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .movement-figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.movement-row { min-width: 0; overflow: hidden; border: 1px solid #2c3b50; border-radius: 14px; background: #0b1523; }
-.movement-row svg { width: 100%; display: block; }
+.movement-row { display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+  border: 1px solid #2c3b50; border-radius: 14px; background: #0b1523; }
+.movement-row svg { width: 100%; display: block; flex: 1; height: 0; min-height: 240px; }
 .movement-label { color: #ffb16d; font-size: 16px; font-weight: 650; }
 #seatStudio { padding: clamp(18px, 3vw, 40px); background: linear-gradient(140deg, #142236, #0b1421 55%, #101c2d);
   border: 1px solid #344962; border-radius: 18px; box-shadow: 0 24px 80px #02060e88; }
@@ -252,16 +261,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .studio-legend span:first-child i { background: #899099; }
 .studio-legend span:nth-child(2) i { background: #ffb16d; }
 #seatAnimationStatus { padding: 0 28px 20px; color: #a6b8ce; font-size: 12px; min-height: 42px; }
-.studio-details { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 28px; padding-top: 26px; border-top: 1px solid #2b3c53; }
+.studio-details { display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr); gap: 24px; margin-top: 28px; padding-top: 26px; border-top: 1px solid #2b3c53; }
 .studio-details .studio-reference-schema { grid-row: span 2; margin: 0; }
-.studio-details .studio-reference-schema svg { max-height: 580px; }
+.studio-details .studio-reference-schema svg { max-height: none; }
 .studio-details h3 { font-size: 20px; font-weight: 550; margin: 8px 0; }
 .studio-details p { color: #a5b7cd; font-size: 12px; line-height: 1.8; }
 .studio-details b { color: #d7e5f7; }
 .studio-details .studio-disclaimer { color: #c3a78c; font-size: 11px; }
 @media (max-width: 650px) {
   .studio-heading, .studio-hero-top { flex-direction: column; }
-  .studio-details { grid-template-columns: 1fr; gap: 15px; }
   .studio-card-copy { padding: 0 15px 18px; }
   .studio-timeline { padding: 0 16px; font-size: 14px; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .studio-stage-label { left: 14px; font-size: 12px; }
@@ -285,28 +293,30 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .screen-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .screen-nav button { border: 1px solid var(--line); background: var(--panel2); border-radius: 6px; padding: 8px 14px; cursor: pointer; }
 .screen-nav button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #35271f; }
-.capture-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, .7fr); gap: 12px; align-items: start; }
-.capture-layout > .left { align-self: center; }
+.capture-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .capture-layout[hidden], [data-studio-view][hidden] { display: none; }
 .camera-details { color: var(--muted); font-size: 11px; margin-top: 8px; }
 .camera-details summary { cursor: pointer; }
-@media (min-width: 900px) and (min-height: 620px) {
+@media (min-width: 900px) {
   .shell { max-width: none; padding: 12px 20px; }
   header { padding-bottom: 8px; }
   .layout { display: block; margin-top: 10px; }
+  .capture-layout > .card { padding: 12px; }
+  .movement-figures { min-height: max(360px, calc(100vh - 300px)); }
+  .studio-details .studio-reference-schema svg { height: max(480px, calc(100vh - 240px)); }
+  #seatStudio[data-active-screen="reference"] .studio-heading { display: none; }
+}
+@media (min-width: 900px) and (min-height: 620px) {
   .card { padding: 12px; }
-  .choice { min-height: 65px; padding: 6px 3px; }
-  .body-types .choice { min-height: 52px; padding: 4px; }
-  #sourceVideo, #decodedVideoPreview { max-height: var(--capture-media-height); }
+  .choice { min-height: 92px; padding: 6px 3px; }
+  .body-types .choice { min-height: 92px; padding: 6px 3px; }
   .morphology-figure { margin-top: 6px; padding-top: 6px; gap: 6px; }
   .morphology-figure-legend { gap: 4px; }
   #seatStudio { padding: 14px 18px; }
-  #seatStudio[data-active-screen="animation"] .studio-heading,
-  #seatStudio[data-active-screen="reference"] .studio-heading { display: none; }
+  #seatStudio[data-active-screen="animation"] .studio-heading { display: none; }
   .studio-heading h2 { font-size: 22px; margin: 3px 0; }
   .studio-heading p { font-size: 11px; }
   .movement-figures { gap: 10px; }
-  .movement-row svg { height: min(25vh, 185px); }
   .studio-card-heading { padding: 8px 12px 0; }
   .studio-card-copy { padding: 0 12px 10px; gap: 3px; }
   .studio-hero { margin-top: 8px; }
@@ -322,13 +332,17 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   #seatAnimationStatus { padding: 0 16px 8px; min-height: 0; }
   .studio-details { margin-top: 8px; padding-top: 8px; }
   .studio-details p { line-height: 1.5; }
-  .studio-details .studio-reference-schema svg { max-height: max(220px, calc(100vh - 250px)); }
   .foot { margin-top: 8px; padding-top: 6px; }
 }
-@media (max-width: 899px) { .capture-layout { grid-template-columns: 1fr; } }
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
+  .studio-details { grid-template-columns: 1fr; gap: 18px; }
+  .studio-details .studio-reference-schema { grid-row: auto; }
+  .morphology-figure { grid-template-columns: 1fr; }
+  .morphology-figure-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .morphology-segment { grid-template-columns: 10px minmax(0, 1fr) max-content; gap: 4px; font-size: 11px; }
+  .morphology-segment output { font-size: 12px; }
 }
+@media (max-width: 700px) { .profile-groups { grid-template-columns: 1fr; gap: 14px; } }
 @media (max-width: 540px) {
   .shell { padding: 15px 12px; }
   .upload-grid { grid-template-columns: 1fr; }
@@ -353,8 +367,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     <div class="brand">
       <h1>MORPHOLOGY SUMMARY AND SEATING CONFIGURATION PREVIEW</h1>
     </div>
-    <div class="top-right"><span class="prototype">PROTOTYPE · NO SEAT ACTUATION</span></div>
+    <div class="top-right"><a href="/?auto=1">AUTOMATIC DEMO</a><span class="prototype">PROTOTYPE · NO SEAT ACTUATION</span></div>
   </header>
+  <div id="autoDemoStatus" role="status" aria-live="polite" hidden></div>
 
   <nav class="screen-nav" aria-label="HMI views">
     <button type="button" data-screen="capture" aria-pressed="true">Video &amp; profile</button>
@@ -432,25 +447,71 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
         </div>
       </div>
     </div>
-    <section class="left">
-      <div class="card profile-card">
+    <section class="card profile-card">
+      <div class="profile-groups">
+        <div>
         <h2 class="step">SIZE CLASS <span class="info" title="Illustrative height bands. Replace with validated population and vehicle-specific calibration.">i</span></h2>
         <div class="profiles" role="group" aria-label="Driver size profile">
-          <button class="choice" data-size="small"><span class="person-icon">S</span><strong>Small</strong><small>&lt;160 cm</small></button>
-          <button class="choice active" data-size="medium"><span class="person-icon">M</span><strong>Medium</strong><small>160–180 cm</small></button>
-          <button class="choice" data-size="large"><span class="person-icon">L</span><strong>Large</strong><small>&gt;180 cm</small></button>
+          <button class="choice" data-size="small">
+            <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <path class="height-guide" d="M77 31H85M81 31V114M77 114H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
+              <g class="height-person mannequin" transform="translate(10 27) scale(.76)"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+            </svg>
+            <strong>Small</strong><small>&lt;160 cm</small>
+          </button>
+          <button class="choice active" data-size="medium">
+            <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <path class="height-guide" d="M77 18H85M81 18V114M77 114H85M81 28H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
+              <g class="height-person mannequin" transform="translate(5 14) scale(.88)"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+            </svg>
+            <strong>Medium</strong><small>160–180 cm</small>
+          </button>
+          <button class="choice" data-size="large">
+            <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <path class="height-guide" d="M77 5H85M81 5V114M77 114H85M81 12H85M81 28H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
+              <g class="height-person mannequin"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+            </svg>
+            <strong>Large</strong><small>&gt;180 cm</small>
+          </button>
         </div>
         <p class="under-cta">Selecting a size manually uses a representative height; a detected torso is required for a backrest estimate.</p>
-        <h2 class="step" style="margin-top:17px">BUILD CATEGORY</h2>
+        </div>
+        <div>
+        <h2 class="step">BUILD CATEGORY</h2>
         <div class="body-types" role="group" aria-label="Body morphology profile">
-          <button class="choice" data-build="athletic"><span class="person-icon">◇</span><strong>Athletic</strong></button>
-          <button class="choice active" data-build="average"><span class="person-icon">◯</span><strong>Average</strong></button>
-          <button class="choice" data-build="robust"><span class="person-icon">⬭</span><strong>Robust</strong></button>
+          <button class="choice" data-build="athletic">
+            <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <g class="mannequin">
+                <image class="build-torso" href="/assets/profile-mannequin-athletic.png" x="15.81" width="68.38" height="115"/>
+              </g>
+              <path class="width-guide" d="M21 119V122H79V119"/>
+            </svg>
+            <strong>Athletic</strong>
+          </button>
+          <button class="choice active" data-build="average">
+            <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <g class="mannequin">
+                <image class="build-torso" href="/assets/profile-mannequin.png" x="23.27" width="53.46" height="115"/>
+              </g>
+              <path class="width-guide" d="M29 119V122H71V119"/>
+            </svg>
+            <strong>Average</strong>
+          </button>
+          <button class="choice" data-build="robust">
+            <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
+              <g class="mannequin">
+                <image class="build-torso" href="/assets/profile-mannequin-robust.png" x="10.84" width="78.32" height="115"/>
+              </g>
+              <path class="width-guide" d="M15 119V122H85V119"/>
+            </svg>
+            <strong>Robust</strong>
+          </button>
+        </div>
+        <p class="under-cta">Illustrative proportions only. These categories do not assess sex, gender, fitness or health.</p>
+        </div>
         </div>
         <div id="profileStatus" class="upload-status" role="status">No video loaded.</div>
-        <details class="camera-details"><summary>Camera and frame selection assumptions (not calibrated)</summary><p>A complete near-camera frame is accepted after two consecutive checks of the same person. If none is found, the best stable full-body frame is selected at the end.</p><p>Mirror position: X 74 cm, Y -85 cm, Z 87 cm; camera height above ground: 115 cm. Model pose: yaw +93° from forward toward vehicle-left, effective pitch −11.5°, roll −0.1°; yaw direction is unverified. Pitch and roll were fitted to seven videos of three people; the effective pitch differs from the user-supplied −15°. These are not measured physical angles. Estimated intrinsics: fx 830 px, fy 1078 px, cx 964 px, cy 544 px at 1928 × 1088. Portrait video assumes a 90° anticlockwise rotation and resize to frame dimensions without cropping. Camera pose and lens distortion are not calibrated. No vehicle commands.</p></details>
-      </div>
-
+        <details class="camera-details"><summary>Camera and frame selection assumptions (not calibrated)</summary><p>A complete near-camera frame is accepted after two consecutive checks of the same person. Up to five nearby complete frames supply the median height. If none is found, the best stable full-body frame is selected at the end.</p><p id="cameraModelAssumptions">For 9:16 portrait video, one shared reference-height fit uses pitch -5.86 degrees, roll -8.52 degrees, horizontal FOV 53.39 degrees and vertical FOV 50.16 degrees at a camera height of 115 cm. Other aspect ratios retain the legacy simulation. Parameters are fitted to eight videos of four people, not physically calibrated; accuracy on new people is not established. No vehicle commands.</p></details>
     </section>
 
     </div>
@@ -474,6 +535,57 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   const representativeHeights = {small: 158, medium: 178, large: 195};
   let seatAvailable = true;
   let activeScreen = "capture";
+  const automatic = new URLSearchParams(location.search).get("auto") === "1";
+  let autoController = new AbortController();
+  const autoStatus = document.getElementById("autoDemoStatus");
+  autoStatus.hidden = !automatic;
+  function stopAutomatic(message) {
+    if (autoController.signal.aborted) return;
+    autoController.abort();
+    SeatStudio.stop();
+    autoStatus.textContent = message;
+  }
+  window.addEventListener("pagehide", () => stopAutomatic("Automatic sequence stopped."));
+  function demoPause(signal) {
+    return new Promise(resolve => {
+      if (signal.aborted) { resolve(false); return; }
+      const aborted = () => { clearTimeout(timer); resolve(false); };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", aborted);
+        resolve(true);
+      }, 6000);
+      signal.addEventListener("abort", aborted, {once: true});
+    });
+  }
+  async function advanceAutomatic() {
+    autoController.abort();
+    SeatStudio.stop();
+    autoController = new AbortController();
+    const signal = autoController.signal;
+    autoStatus.hidden = false;
+    showScreen("capture");
+    if (!seatAvailable) {
+      stopAutomatic("Automatic sequence stopped: no supported seat estimate is available.");
+      return;
+    }
+    autoStatus.textContent = "Step 1 complete. Seat adjustments in 6 seconds…";
+    if (!await demoPause(signal)) return;
+    showScreen("adjustments");
+    autoStatus.textContent = "Step 2: seat adjustments. Animation in 6 seconds…";
+    if (!await demoPause(signal)) return;
+    showScreen("animation");
+    autoStatus.textContent = "Step 3: playing seat animation…";
+    const completed = await SeatStudio.play();
+    if (signal.aborted) return;
+    if (!completed) {
+      stopAutomatic("Automatic sequence stopped: seat animation interrupted.");
+      return;
+    }
+    autoStatus.textContent = "Animation complete. Reference details in 6 seconds…";
+    if (!await demoPause(signal)) return;
+    showScreen("reference");
+    autoStatus.textContent = "Step 4: reference details. Automatic sequence complete.";
+  }
   function showScreen(screen) {
     activeScreen = screen;
     document.getElementById("captureScreen").hidden = screen !== "capture";
@@ -488,7 +600,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     });
   }
   document.querySelectorAll("[data-screen]").forEach(button =>
-    button.addEventListener("click", () => showScreen(button.dataset.screen))
+    button.addEventListener("click", () => {
+      stopAutomatic("Automatic sequence stopped. Manual navigation.");
+      showScreen(button.dataset.screen);
+    })
   );
 
   function updateSeat(height, torsoCm = null) {
@@ -505,10 +620,14 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   }
 
   sizeButtons.forEach(button => button.addEventListener("click", () => {
+    stopAutomatic("Automatic sequence stopped. Manual profile selection.");
     selectSize(button.dataset.size);
     updateSeat(representativeHeights[button.dataset.size]);
   }));
-  buildButtons.forEach(button => button.addEventListener("click", () => selectBuild(button.dataset.build)));
+  buildButtons.forEach(button => button.addEventListener("click", () => {
+    stopAutomatic("Automatic sequence stopped. Manual profile selection.");
+    selectBuild(button.dataset.build);
+  }));
   updateSeat(representativeHeights.medium);
   const imageView = {
     image: null,
@@ -663,8 +782,11 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
     detectionViewport.classList.add("scanning");
     detectionStatus.textContent = `Person detected at ${timestamp.toFixed(2)} s. Frozen frame; collecting height measurements…`;
   }
-  VideoCapture.mount({
+  const capture = VideoCapture.mount({
     playback(video) {
+      if (automatic && !autoController.signal.aborted) {
+        autoStatus.textContent = "Step 1: simulated camera playing; analyzing the driver…";
+      }
       startPlaybackMirror(video);
     },
     progress(dataUrl, timestamp) {
@@ -677,6 +799,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       detectionStatus.textContent = `Checking sampled frame at ${timestamp.toFixed(2)} s…`;
     },
     failed() {
+      stopAutomatic("Automatic sequence stopped: video analysis failed. Review the video status.");
       stopPlaybackMirror();
       detectionViewport.classList.remove("scanning");
     },
@@ -702,7 +825,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       detectionViewport.classList.remove("scanning");
       detectionViewport.hidden = true;
       const calibrated = result.calibration_mode === "vehicle_camera";
-      const simulated = result.calibration_mode === "simulated_vehicle_camera";
+      const simulated = result.estimation_mode === "simulated_camera_geometry";
+      document.getElementById("cameraModelAssumptions").textContent = result.warnings.join(" ");
       selectSize(result.size_class);
       selectBuild(result.build_category);
       const morphology = result.morphology_dimensions_cm;
@@ -713,8 +837,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       status.textContent = calibrated
         ? `Calibrated camera height estimate complete at ${timestamp.toFixed(2)} s. Review the calibration and geometry residual before use.`
         : simulated
-          ? `Simulated camera estimate from ${result.height_sample_count} frame(s)${result.height_sample_count > 1 ? " (median)" : " (single-frame fallback)"}; frozen at ${timestamp.toFixed(2)} s. This is not calibrated.`
+          ? `${result.calibration_mode === "reference_height_fit" ? "Reference-fitted" : "Simulated"} camera estimate from ${result.height_sample_count} frame(s)${result.height_sample_count > 1 ? " (median)" : " (single-frame fallback)"}; frozen at ${timestamp.toFixed(2)} s. This is not calibrated.`
           : `Reference-marker analysis complete at ${timestamp.toFixed(2)} s.`;
+      await advanceAutomatic();
     } catch (error) {
       stopPlaybackMirror();
       detectionViewport.classList.remove("scanning");
@@ -739,6 +864,23 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       }
     }
   });
+  document.getElementById("videoFile").addEventListener("change", () => {
+    stopAutomatic("Automatic sequence stopped. Manual video selection.");
+  });
+  if (automatic) {
+    autoStatus.textContent = "Step 1: loading simulated camera video (rotated_1.mp4)…";
+    (async () => {
+      const signal = autoController.signal;
+      try {
+        const response = await fetch("/demo-video", {signal});
+        if (!response.ok) throw new Error("Cannot load rotated_1.mp4. Place it in the server working directory and reload the automatic demo.");
+        const file = new File([await response.blob()], "rotated_1.mp4", {type: "video/mp4"});
+        if (!signal.aborted) await capture.load(file);
+      } catch (error) {
+        if (!signal.aborted) stopAutomatic(error.message || "Automatic video loading failed.");
+      }
+    })();
+  }
 })();
 </script>
 </body>
@@ -752,22 +894,53 @@ class _HmiHandler(BaseHTTPRequestHandler):
         name: (Path(__file__).parent / "assets" / name).read_bytes()
         for name in ("video-capture.js", "seat-studio.js")
     }
+    image_assets: ClassVar[dict[str, bytes]] = {
+        name: (Path(__file__).parent / "assets" / name).read_bytes()
+        for name in ("profile-mannequin.png", "profile-mannequin-athletic.png", "profile-mannequin-robust.png")
+    }
     pose_estimator: ClassVar[DriverPoseEstimator | None] = None
     face_detector: ClassVar[FaceHeightDetector | None] = None
+    demo_video_path: ClassVar[Path] = Path("rotated_1.mp4")
 
     def do_GET(self) -> None:
-        asset_name = self.path.removeprefix("/assets/")
-        if self.path.startswith("/assets/") and asset_name in self.script_assets:
-            body = self.script_assets[asset_name]
+        request_path = urlsplit(self.path).path
+        if request_path == "/demo-video":
+            try:
+                stream = self.demo_video_path.open("rb")
+            except OSError:
+                logger.exception("Cannot open automatic demo video: %s", self.demo_video_path)
+                self.send_error(404, "Automatic demo video rotated_1.mp4 is unavailable.")
+                return
+            with stream:
+                stream.seek(0, 2)
+                size = stream.tell()
+                if not 0 < size <= 500 * 1024 * 1024:
+                    self.send_error(400, "Automatic demo video must be nonempty and smaller than 500 MB.")
+                    return
+                stream.seek(0)
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                while chunk := stream.read(1024 * 1024):
+                    self.wfile.write(chunk)
+            return
+        asset_name = request_path.removeprefix("/assets/")
+        if request_path.startswith("/assets/") and (
+            asset_name in self.script_assets or asset_name in self.image_assets
+        ):
+            is_image = asset_name in self.image_assets
+            body = self.image_assets[asset_name] if is_image else self.script_assets[asset_name]
             self.send_response(200)
-            self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Content-Type", "image/png" if is_image else "text/javascript; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
 
-        if self.path not in ("/", "/index.html"):
+        if request_path not in ("/", "/index.html"):
             self.send_error(404)
             return
         body = self.page.encode("utf-8")
@@ -1219,7 +1392,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             )
             near_camera = relative_height >= 0.68
             try:
-              simulated_camera = CameraCalibration.simulated_for_image(
+              simulated_camera = CameraCalibration.simulated_video_for_image(
                 (frame_width, frame_height)
               )
               estimate = self._estimate_calibrated_height(simulated_camera, pose, image)
@@ -1333,7 +1506,7 @@ class _HmiHandler(BaseHTTPRequestHandler):
             camera_model = (
                 CameraCalibration.from_dict(calibration_data)
                 if calibrated_demo
-                else CameraCalibration.simulated_for_image(
+                else CameraCalibration.simulated_video_for_image(
                     (image.shape[1], image.shape[0])
                 )
             )
@@ -1494,6 +1667,9 @@ class _HmiHandler(BaseHTTPRequestHandler):
             shoulder_width = morphology_dimensions_cm["shoulder_width"]
             hip_width = morphology_dimensions_cm["hip_width"]
 
+        reference_height_fit = simulated_demo and CameraCalibration.matches_reference_video_size(
+          (image_width, image_height)
+        )
         if calibrated_demo:
           calibration = CameraCalibration.from_dict(calibration_data)
           reprojection_error = (
@@ -1512,7 +1688,13 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "The seat movement preview is illustrative, not a validated comfort or driving recommendation.",
           ]
         elif simulated_demo:
-          if camera_model.reported_diagonal_fov_deg is not None:
+          if reference_height_fit:
+            intrinsics_warnings = [
+              f"EMPIRICAL REFERENCE-HEIGHT FIT, NOT PHYSICALLY CALIBRATED: one shared model fitted to eight videos of four people (153, 163, 178 and 185 cm), with equal weight per person. Portrait-image FOV {camera_model.horizontal_fov_deg:.2f} horizontal x {camera_model.vertical_fov_deg:.2f} vertical degrees; centered principal point; lens distortion assumed zero.",
+              f"MODEL POSE, NOT PHYSICALLY CALIBRATED: effective pitch {REFERENCE_VIDEO_PITCH_DEG:.2f} degrees (downward), roll {REFERENCE_VIDEO_ROLL_DEG:.2f} degrees about the displayed optical axis. Yaw +{SIMULATED_CAMERA_YAW_DEG:.0f} degrees from vehicle-forward toward vehicle-left is unverified and cannot be fitted from height alone.",
+              "The FOV depends on fitting assumptions and is not an identified lens specification. Applies only to this camera setup and uncropped 9:16 portrait frames; accuracy on new people is not established.",
+            ]
+          elif camera_model.reported_diagonal_fov_deg is not None:
             intrinsics_warnings = [
             f"ESTIMATED INTRINSICS, NOT FULLY CALIBRATED: {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} pixels, fx={SIMULATED_FX_PX:.1f} px, fy={SIMULATED_FY_PX:.1f} px, cx={SIMULATED_CX_PX:.1f} px, cy={SIMULATED_CY_PX:.1f} px; derived FOV {SIMULATED_HORIZONTAL_FOV_DEG:.2f} x {SIMULATED_VERTICAL_FOV_DEG:.2f} degrees; lens distortion is assumed zero.",
             f"FOV SPECIFICATION MISMATCH: reported diagonal is {REPORTED_DIAGONAL_FOV_DEG:.2f} degrees, but horizontal and vertical FOV imply {IMPLIED_DIAGONAL_FOV_DEG:.2f} degrees for a rectilinear camera.",
@@ -1525,9 +1707,12 @@ class _HmiHandler(BaseHTTPRequestHandler):
             intrinsics_warnings = [
               f"SIMULATION ONLY: frame aspect ratio {image_width}x{image_height} does not match the specified {CAMERA_IMAGE_SIZE_PX[0]}x{CAMERA_IMAGE_SIZE_PX[1]} camera. Rotation or cropping is unknown, so a generic 70 degree horizontal FOV is used instead of the mirror-camera specs.",
             ]
+          if not reference_height_fit:
+            intrinsics_warnings.append(
+            f"MODEL POSE, NOT PHYSICALLY CALIBRATED: effective pitch {SIMULATED_CAMERA_PITCH_DEG:.1f} degrees (downward) and roll {SIMULATED_CAMERA_ROLL_DEG:.1f} degrees fitted to seven videos of three people; pitch differs from the user-supplied -15 degrees. Yaw +{SIMULATED_CAMERA_YAW_DEG:.0f} degrees from vehicle-forward toward vehicle-left is unverified and cannot be fitted from height alone. Searched pitch {CAMERA_PITCH_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_PITCH_SEARCH_RANGE_DEG[1]:.0f} degrees and roll {CAMERA_ROLL_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_ROLL_SEARCH_RANGE_DEG[1]:.0f} degrees.",
+            )
           warnings = intrinsics_warnings + [
             f"REPORTED CAMERA POSITION: X 0.74 m aft, Y -0.85 m, Z 0.87 m in the supplied vehicle axes; camera height above ground is {SIMULATED_CAMERA_HEIGHT_M:.2f} m, giving ground Z=-0.28 m.",
-            f"MODEL POSE, NOT PHYSICALLY CALIBRATED: effective pitch {SIMULATED_CAMERA_PITCH_DEG:.1f} degrees (downward) and roll {SIMULATED_CAMERA_ROLL_DEG:.1f} degrees fitted to seven videos of three people; pitch differs from the user-supplied -15 degrees. Yaw +{SIMULATED_CAMERA_YAW_DEG:.0f} degrees from vehicle-forward toward vehicle-left is unverified and cannot be fitted from height alone. Searched pitch {CAMERA_PITCH_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_PITCH_SEARCH_RANGE_DEG[1]:.0f} degrees and roll {CAMERA_ROLL_SEARCH_RANGE_DEG[0]:.0f} to {CAMERA_ROLL_SEARCH_RANGE_DEG[1]:.0f} degrees.",
             f"ILLUSTRATIVE ONLY: sensitivity to camera height {low_mount_height:.2f}-{high_mount_height:.2f} m is {height_sensitivity_range_cm[0]:.1f}-{height_sensitivity_range_cm[1]:.1f} cm. This is not a measured uncertainty interval and excludes camera orientation, FOV inconsistency, lens distortion, vehicle pitch, and pose error.",
             "The height estimate is not a validated physical measurement. Measure camera orientation and calibrate lens distortion before relying on metric height.",
             "Morphology centimeters are image-space proportions scaled by the simulated person-box height; they are not calibrated physical dimensions.",
@@ -1561,6 +1746,8 @@ class _HmiHandler(BaseHTTPRequestHandler):
             "calibration_mode": (
                 "vehicle_camera"
                 if calibrated_demo
+                else "reference_height_fit"
+                if simulated_demo and reference_height_fit
                 else "simulated_vehicle_camera"
                 if simulated_demo
                 else None
@@ -1717,6 +1904,11 @@ def run() -> None:
         default=8765,
         help="Local web server port (default: 8765)",
     )
+    parser.add_argument(
+        "--auto-demo",
+        action="store_true",
+        help="Open the hands-free demonstration using local rotated_1.mp4",
+    )
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
@@ -1729,7 +1921,7 @@ def run() -> None:
         f"Cannot start HMI on port {args.port}: {error}. "
         "Stop the existing HMI or choose another port with --port.\n",
       )
-    url = f"http://127.0.0.1:{args.port}/"
+    url = f"http://127.0.0.1:{args.port}/" + ("?auto=1" if args.auto_demo else "")
     print(f"Seat HMI prototype running at {url}")
     print("Press Ctrl+C to stop. No real seat actuation is connected.")
     webbrowser.open(url)
