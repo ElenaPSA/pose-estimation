@@ -117,6 +117,20 @@ function checkCaptureLayout() {
       throw new Error("Profile figures must use the supplied mannequin template.");
     }
   }
+  if (innerWidth > 700) {
+    const buttons = [...document.querySelectorAll("[data-size], [data-build]")];
+    const first = buttons[0];
+    const card = first.getBoundingClientRect();
+    const figure = first.querySelector("svg").getBoundingClientRect();
+    const baseline = first.querySelector("image").getBoundingClientRect().bottom;
+    for (const button of buttons) {
+      if (Math.abs(button.getBoundingClientRect().height - card.height) > 1 ||
+          Math.abs(button.querySelector("svg").getBoundingClientRect().top - figure.top) > 1 ||
+          Math.abs(button.querySelector("image").getBoundingClientRect().bottom - baseline) > 1) {
+        throw new Error("Size and build figures must share aligned cards and foot baselines.");
+      }
+    }
+  }
   return ["Full-width figures", "Controls below figures", "Larger preview", "Distinct height and build illustrations", "Decorative human icons"];
 }
 

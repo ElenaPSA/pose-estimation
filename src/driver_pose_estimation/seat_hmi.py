@@ -230,14 +230,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .range-labels { display: flex; justify-content: space-between; padding: 0 4px;
   color: var(--muted); font-size: 10px; }
 .profile-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.profiles, .body-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
-.choice { min-height: 88px; border: 1px solid var(--line); border-radius: 7px;
+.profiles, .body-types { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(180px, auto); gap: 9px; }
+.choice { display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  min-height: 88px; border: 2px solid var(--line); border-radius: 7px;
   background: #121f2f; cursor: pointer; padding: 10px 7px; text-align: center;
   transition: .15s ease; }
 .choice:hover { border-color: #58779a; background: #18273d; transform: translateY(-1px); }
-.choice.active { border: 2px solid var(--accent); background: #35271f; box-shadow: inset 0 -3px 0 var(--accent); }
+.choice.active { border-color: var(--accent); background: #35271f; box-shadow: inset 0 -3px 0 var(--accent); }
 .person-icon { display: block; width: min(100%, 90px); height: 112px; margin: 0 auto 6px;
-  stroke-linecap: round; stroke-linejoin: round; }
+  flex: none; stroke-linecap: round; stroke-linejoin: round; }
 .size-icon { fill: none; }
 .size-icon .height-guide, .build-icon .width-guide { fill: none; stroke: var(--cyan); stroke-width: 1; }
 .build-icon { fill: var(--accent); }
@@ -582,21 +584,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <button class="choice" data-size="small">
             <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <path class="height-guide" d="M77 31H85M81 31V114M77 114H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
-              <g class="height-person mannequin" transform="translate(10 27) scale(.76)"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+              <g class="height-person mannequin" transform="translate(12 27.6) scale(.76)"><image href="/assets/profile-mannequin.png" x="20.78" width="53.46" height="115"/></g>
             </svg>
             <strong>Small</strong><small>&lt;160 cm</small>
           </button>
           <button class="choice active" data-size="medium">
             <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <path class="height-guide" d="M77 18H85M81 18V114M77 114H85M81 28H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
-              <g class="height-person mannequin" transform="translate(5 14) scale(.88)"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+              <g class="height-person mannequin" transform="translate(6 13.8) scale(.88)"><image href="/assets/profile-mannequin.png" x="20.78" width="53.46" height="115"/></g>
             </svg>
             <strong>Medium</strong><small>160–180 cm</small>
           </button>
           <button class="choice" data-size="large">
             <svg class="person-icon size-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <path class="height-guide" d="M77 5H85M81 5V114M77 114H85M81 12H85M81 28H85M81 44H85M81 60H85M81 76H85M81 92H85"/>
-              <g class="height-person mannequin"><image href="/assets/profile-mannequin.png" x="18" width="53.46" height="115"/></g>
+              <g class="height-person mannequin"><image href="/assets/profile-mannequin.png" x="20.78" width="53.46" height="115"/></g>
             </svg>
             <strong>Large</strong><small>&gt;180 cm</small>
           </button>
@@ -609,7 +611,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <button class="choice" data-build="athletic">
             <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <g class="mannequin">
-                <image class="build-torso" href="/assets/profile-mannequin-athletic.png" x="15.81" width="68.38" height="115"/>
+                <image class="build-torso" href="/assets/profile-mannequin-athletic.png" x="13.32" width="68.38" height="115"/>
               </g>
               <path class="width-guide" d="M21 119V122H79V119"/>
             </svg>
@@ -618,7 +620,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <button class="choice active" data-build="average">
             <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <g class="mannequin">
-                <image class="build-torso" href="/assets/profile-mannequin.png" x="23.27" width="53.46" height="115"/>
+                <image class="build-torso" href="/assets/profile-mannequin.png" x="20.78" width="53.46" height="115"/>
               </g>
               <path class="width-guide" d="M29 119V122H71V119"/>
             </svg>
@@ -627,7 +629,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
           <button class="choice" data-build="robust">
             <svg class="person-icon build-icon" viewBox="0 0 100 124" aria-hidden="true" focusable="false">
               <g class="mannequin">
-                <image class="build-torso" href="/assets/profile-mannequin-robust.png" x="10.84" width="78.32" height="115"/>
+                <image class="build-torso" href="/assets/profile-mannequin-robust.png" x="8.35" width="78.32" height="115"/>
               </g>
               <path class="width-guide" d="M15 119V122H85V119"/>
             </svg>

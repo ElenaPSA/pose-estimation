@@ -197,7 +197,7 @@ def test_hmi_uses_script_snapshot_when_asset_changes(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("category", ["athletic", "robust"])
-def test_mannequin_variants_change_proportions_without_resizing_head_or_legs(category) -> None:
+def test_mannequin_variants_preserve_head_legs_and_arm_shapes(category) -> None:
     original = cv2.imdecode(
         np.frombuffer(_HmiHandler.image_assets["profile-mannequin.png"], dtype=np.uint8),
         cv2.IMREAD_COLOR,
@@ -212,14 +212,29 @@ def test_mannequin_variants_change_proportions_without_resizing_head_or_legs(cat
     aligned = variant[:, margin:margin + original.shape[1]]
     np.testing.assert_array_equal(aligned[:29], original[:29])
     np.testing.assert_array_equal(aligned[123:], original[123:])
+    arm_offset = 6 if category == "athletic" else 4
+    np.testing.assert_array_equal(
+        variant[60:105, margin - arm_offset + 14:margin - arm_offset + 25],
+        original[60:105, 14:25],
+    )
+    np.testing.assert_array_equal(
+        variant[60:105, margin + arm_offset + 69:margin + arm_offset + 78],
+        original[60:105, 69:78],
+    )
 
     original_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
     variant_gray = cv2.cvtColor(variant, cv2.COLOR_BGR2GRAY)
     shoulder_ratio = np.ptp(np.flatnonzero(variant_gray[42] > 45)) / np.ptp(
         np.flatnonzero(original_gray[42] > 45)
     )
-    original_torso_width = np.ptp(np.flatnonzero(original_gray[76] > 45))
-    variant_torso_width = np.ptp(np.flatnonzero(variant_gray[76] > 45))
+    def torso_width(gray):
+        pixels = np.flatnonzero(gray[76] > 45)
+        regions = np.split(pixels, np.where(np.diff(pixels) > 1)[0] + 1)
+        center = gray.shape[1] // 2
+        return np.ptp(next(region for region in regions if region[0] <= center <= region[-1]))
+
+    original_torso_width = torso_width(original_gray)
+    variant_torso_width = torso_width(variant_gray)
     if category == "athletic":
         assert shoulder_ratio >= 1.25
         assert variant_torso_width <= original_torso_width * .85
