@@ -255,7 +255,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 .captured { margin-top: 12px; padding: 11px; border: 1px dashed #465f7e;
   border-radius: 6px; color: var(--text); font-size: 12px; background: var(--panel2); }
 .captured input { display: block; width: 100%; margin-top: 7px; color: var(--text); font-size: 12px; }
-.upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto 1fr; gap: 10px; }
+/* Both panels share the header/media/details rows so the two images start at the same height. */
+.upload-view, .detection-panel { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: subgrid; grid-row: span 3; row-gap: 0; align-content: start; }
 .upload-view { min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 6px; }
 .upload-view label { display: block; font-size: 11px; font-weight: 700; }
 .upload-view input { display: block; max-width: 100%; margin-top: 4px; }
@@ -470,7 +472,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 @media (max-width: 700px) { .profile-groups { grid-template-columns: 1fr; gap: 14px; } }
 @media (max-width: 540px) {
   .shell { padding: 15px 12px; }
-  .upload-grid { grid-template-columns: 1fr; }
+  .upload-grid { grid-template-columns: 1fr; grid-template-rows: none; }
+  .upload-view, .detection-panel { display: block; grid-row: auto; }
   header { align-items: flex-start; }
   .top-right { display: none; }
   .movement-figures { grid-template-columns: 1fr; }
@@ -508,15 +511,19 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
       <h2 class="step">LOAD VIDEO / AUTOMATIC FULL-BODY CAPTURE</h2>
       <div class="upload-grid">
         <div class="upload-view">
-          <label for="videoFile">Driver video</label>
-          <input id="videoFile" type="file" accept="video/*">
-          <div id="videoFileStatus" class="upload-status">No video selected.</div>
-          <div id="liveCameraControls" hidden>
-            <button id="liveCameraButton" class="upload-submit" type="button">Use live camera</button>
-            <div id="liveCameraStatus" class="upload-status"></div>
+          <div class="capture-header">
+            <label for="videoFile">Driver video</label>
+            <input id="videoFile" type="file" accept="video/*">
+            <div id="videoFileStatus" class="upload-status">No video selected.</div>
+            <div id="liveCameraControls" hidden>
+              <button id="liveCameraButton" class="upload-submit" type="button">Use live camera</button>
+              <div id="liveCameraStatus" class="upload-status"></div>
+            </div>
           </div>
-          <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;object-fit:contain" aria-label="Uploaded video preview"></video>
-          <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;object-fit:contain">
+          <div class="capture-media">
+            <video id="sourceVideo" hidden muted playsinline controls preload="metadata" style="width:100%;object-fit:contain" aria-label="Uploaded video preview"></video>
+            <img id="decodedVideoPreview" hidden alt="Sampled local video preview while full-body frames are checked" style="width:100%;object-fit:contain">
+          </div>
         </div>
         <div class="detection-panel">
           <div class="detection-title">Detecting Person / selected frame</div>
@@ -527,6 +534,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
               <div class="detection-sweep" aria-hidden="true"></div>
             </div>
           </div>
+          <div class="detection-details">
           <div id="morphologyFigure" class="morphology-figure" hidden>
             <div class="morphology-figure-heading">DETECTED BODY / ESTIMATED SEGMENTS</div>
             <div id="morphologyFigureStage" class="morphology-figure-stage">
@@ -573,6 +581,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
             <div class="morphology-figure-note">2D landmarks; lengths are uncalibrated estimates, not independent 3D anatomical measurements.</div>
           </div>
           <div id="detectionStatus" class="detection-status" role="status">Upload a video to find a high-confidence full-body frame.</div>
+          </div>
         </div>
       </div>
     </div>
